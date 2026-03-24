@@ -39,9 +39,9 @@ class TagRepository:
         query = text(
             """
             INSERT OR IGNORE INTO document_tags (
-                document_id, tag_type, tag_value, confidence
+                document_id, tag_type, tag_value, tag_source, confidence
             ) VALUES (
-                :document_id, :tag_type, :tag_value, :confidence
+                :document_id, :tag_type, :tag_value, :tag_source, :confidence
             )
             """
         )

@@ -27,8 +27,9 @@ CREATE TABLE IF NOT EXISTS documents (
 CREATE TABLE IF NOT EXISTS document_tags (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     document_id INTEGER NOT NULL,
-    tag_type TEXT NOT NULL,
+    tag_type TEXT NOT NULL CHECK (tag_type IN ('product', 'issue', 'competitor', 'feature')),
     tag_value TEXT NOT NULL,
+    tag_source TEXT NOT NULL DEFAULT 'rules',
     confidence REAL,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (document_id) REFERENCES documents(id),
