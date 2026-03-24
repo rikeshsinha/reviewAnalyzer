@@ -2,17 +2,32 @@ products:
   - web_app
   - mobile_app
   - browser_extension
+  - galaxy watch
+product_aliases:
+  galaxy watch:
+    - samsung watch
+
 issues:
   - performance
   - reliability
   - ux_ui
   - billing
+issue_aliases: {}
+
 competitors:
   - product_a
   - product_b
   - product_c
+  - google_wearables
+competitor_aliases:
+  google_wearables:
+    - pixel watch
+    - google fit
+    - google pixel watch
+
 features:
   - onboarding
   - notifications
   - analytics
   - integrations
+feature_aliases: {}
