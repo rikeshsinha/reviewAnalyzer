@@ -1,0 +1,8 @@
+streamlit
+praw
+sqlalchemy
+pandas
+python-dotenv
+plotly
+pydantic
+openai

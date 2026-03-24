@@ -1,0 +1,18 @@
+products:
+  - web_app
+  - mobile_app
+  - browser_extension
+issues:
+  - performance
+  - reliability
+  - ux_ui
+  - billing
+competitors:
+  - product_a
+  - product_b
+  - product_c
+features:
+  - onboarding
+  - notifications
+  - analytics
+  - integrations
