@@ -66,3 +66,38 @@ CREATE TABLE IF NOT EXISTS saved_insights (
     metadata_json TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(
+    title,
+    content,
+    review_text
+);
+
+CREATE TRIGGER IF NOT EXISTS documents_ai AFTER INSERT ON documents BEGIN
+    INSERT INTO documents_fts(rowid, title, content, review_text)
+    VALUES (
+        new.id,
+        COALESCE(new.title, ''),
+        COALESCE(new.body, ''),
+        COALESCE(new.body, '')
+    );
+END;
+
+CREATE TRIGGER IF NOT EXISTS documents_ad AFTER DELETE ON documents BEGIN
+    INSERT INTO documents_fts(documents_fts, rowid, title, content, review_text)
+    VALUES('delete', old.id, old.title, old.body, old.body);
+END;
+
+CREATE TRIGGER IF NOT EXISTS documents_au AFTER UPDATE ON documents BEGIN
+    INSERT INTO documents_fts(documents_fts, rowid, title, content, review_text)
+    VALUES('delete', old.id, old.title, old.body, old.body);
+    INSERT INTO documents_fts(rowid, title, content, review_text)
+    VALUES (
+        new.id,
+        COALESCE(new.title, ''),
+        COALESCE(new.body, ''),
+        COALESCE(new.body, '')
+    );
+END;
+
+INSERT INTO documents_fts(documents_fts) VALUES('rebuild');

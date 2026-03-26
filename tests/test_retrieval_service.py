@@ -1,0 +1,143 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from sqlalchemy import create_engine, text
+from sqlalchemy.orm import Session
+
+from app.services.retrieval_service import RetrievalService
+
+
+def _build_session() -> Session:
+    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+    schema_path = Path(__file__).resolve().parents[1] / "app" / "db" / "schema.sql"
+
+    with engine.begin() as connection:
+        connection.connection.executescript(schema_path.read_text(encoding="utf-8"))
+
+    return Session(bind=engine, future=True)
+
+
+def test_search_documents_applies_filters_and_pagination() -> None:
+    session = _build_session()
+    service = RetrievalService(session)
+
+    source_id = int(
+        session.execute(
+            text(
+                """
+                INSERT INTO sources (platform, external_id, name, metadata_json)
+                VALUES ('reddit', 'reddit', 'reddit', '{}')
+                """
+            )
+        ).lastrowid
+    )
+
+    rows = [
+        {
+            "external_id": "a",
+            "title": "Battery feedback",
+            "body": "battery performance details",
+            "published_at": "2026-02-03T10:00:00",
+            "subreddit": "android",
+            "tags": [("product", "pixel"), ("issue", "battery")],
+        },
+        {
+            "external_id": "b",
+            "title": "Battery feedback",
+            "body": "battery performance details",
+            "published_at": "2026-02-01T10:00:00",
+            "subreddit": "android",
+            "tags": [("product", "pixel"), ("issue", "battery")],
+        },
+    ]
+
+    for row in rows:
+        doc_id = int(
+            session.execute(
+                text(
+                    """
+                    INSERT INTO documents (source_id, external_id, title, body, author, url, published_at, raw_json)
+                    VALUES (:source_id, :external_id, :title, :body, 'u', 'http://x', :published_at, :raw_json)
+                    """
+                ),
+                {
+                    "source_id": source_id,
+                    "external_id": row["external_id"],
+                    "title": row["title"],
+                    "body": row["body"],
+                    "published_at": row["published_at"],
+                    "raw_json": json.dumps({"subreddit": row["subreddit"]}),
+                },
+            ).lastrowid
+        )
+        for tag_type, tag_value in row["tags"]:
+            session.execute(
+                text(
+                    """
+                    INSERT INTO document_tags (document_id, tag_type, tag_value)
+                    VALUES (:document_id, :tag_type, :tag_value)
+                    """
+                ),
+                {"document_id": doc_id, "tag_type": tag_type, "tag_value": tag_value},
+            )
+    session.commit()
+
+    results = service.search_documents(
+        query="battery",
+        filters={"subreddit": "android", "product_tags": ["pixel"], "issue_tags": ["battery"]},
+        limit=1,
+        offset=0,
+    )
+    assert len(results) == 1
+    assert results[0]["external_id"] == "a"
+
+    next_page = service.search_documents(
+        query="battery",
+        filters={"subreddit": "android", "product_tags": ["pixel"], "issue_tags": ["battery"]},
+        limit=1,
+        offset=1,
+    )
+    assert len(next_page) == 1
+    assert next_page[0]["external_id"] == "b"
+
+
+def test_get_documents_by_ids_preserves_input_order() -> None:
+    session = _build_session()
+    service = RetrievalService(session)
+
+    source_id = int(
+        session.execute(
+            text(
+                """
+                INSERT INTO sources (platform, external_id, name, metadata_json)
+                VALUES ('reddit', 'reddit', 'reddit', '{}')
+                """
+            )
+        ).lastrowid
+    )
+
+    ids: list[int] = []
+    for external_id in ["x", "y", "z"]:
+        doc_id = int(
+            session.execute(
+                text(
+                    """
+                    INSERT INTO documents (source_id, external_id, title, body)
+                    VALUES (:source_id, :external_id, :title, :body)
+                    """
+                ),
+                {
+                    "source_id": source_id,
+                    "external_id": external_id,
+                    "title": external_id,
+                    "body": "body",
+                },
+            ).lastrowid
+        )
+        ids.append(doc_id)
+    session.commit()
+
+    fetched = service.get_documents_by_ids([ids[2], ids[0]])
+    assert [row["id"] for row in fetched] == [ids[2], ids[0]]
