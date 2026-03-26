@@ -14,3 +14,21 @@ Run the 30-day Reddit ingestion job:
 ```bash
 python -m app.jobs.refresh_reddit
 ```
+
+
+## Enrichment job
+
+Run incremental enrichment for documents that do not yet have enrichment rows:
+
+```bash
+python -m app.jobs.enrich_new_docs
+```
+
+Useful environment variables:
+
+- `ENRICHMENT_MAX_DOCS_PER_RUN` (default `100`)
+- `ENRICHMENT_BATCH_SIZE` (default `3`)
+- `ENRICHMENT_MAX_TEXT_CHARS` (default `3500`)
+- `ENRICHMENT_MIN_TEXT_CHARS` (default `20`)
+- `ENRICHMENT_MAX_RETRIES` (default `3`)
+- `ENRICHMENT_MODEL` (default `gpt-4.1-mini`)
