@@ -7,6 +7,7 @@ from typing import Any
 
 import streamlit as st
 from sqlalchemy import text
+from sqlalchemy.exc import OperationalError
 
 from app.db.session import SessionLocal
 from app.ui.pages import admin, ask, dashboard, explorer, insights
@@ -26,58 +27,75 @@ def _coerce_date(raw_value: Any) -> date | None:
 def _get_filter_options() -> dict[str, list[str]]:
     """Load sidebar filter options from DB and cache briefly for responsiveness."""
 
+    default_options = {
+        "min_date": [""],
+        "max_date": [""],
+        "subreddit": [],
+        "product": [],
+        "issue": [],
+        "competitor": [],
+        "db_unavailable": ["true"],
+    }
+
     session = SessionLocal()
     try:
-        date_bounds_row = session.execute(
-            text(
-                """
-                SELECT
-                    MIN(DATE(COALESCE(published_at, created_at))) AS min_date,
-                    MAX(DATE(COALESCE(published_at, created_at))) AS max_date
-                FROM documents
-                """
-            )
-        ).first()
-
-        def _distinct_tag_values(tag_type: str) -> list[str]:
-            rows = session.execute(
+        try:
+            date_bounds_row = session.execute(
                 text(
                     """
-                    SELECT DISTINCT tag_value
-                    FROM document_tags
-                    WHERE tag_type = :tag_type
-                    ORDER BY tag_value
+                    SELECT
+                        MIN(DATE(COALESCE(published_at, created_at))) AS min_date,
+                        MAX(DATE(COALESCE(published_at, created_at))) AS max_date
+                    FROM documents
                     """
-                ),
-                {"tag_type": tag_type},
+                )
+            ).first()
+
+            def _distinct_tag_values(tag_type: str) -> list[str]:
+                rows = session.execute(
+                    text(
+                        """
+                        SELECT DISTINCT tag_value
+                        FROM document_tags
+                        WHERE tag_type = :tag_type
+                        ORDER BY tag_value
+                        """
+                    ),
+                    {"tag_type": tag_type},
+                ).fetchall()
+                return [str(row.tag_value) for row in rows]
+
+            subreddit_rows = session.execute(
+                text(
+                    """
+                    SELECT DISTINCT json_extract(raw_json, '$.subreddit') AS subreddit
+                    FROM documents
+                    WHERE json_extract(raw_json, '$.subreddit') IS NOT NULL
+                    ORDER BY subreddit
+                    """
+                )
             ).fetchall()
-            return [str(row.tag_value) for row in rows]
 
-        subreddit_rows = session.execute(
-            text(
-                """
-                SELECT DISTINCT json_extract(raw_json, '$.subreddit') AS subreddit
-                FROM documents
-                WHERE json_extract(raw_json, '$.subreddit') IS NOT NULL
-                ORDER BY subreddit
-                """
-            )
-        ).fetchall()
-
-        return {
-            "min_date": [str(date_bounds_row.min_date) if date_bounds_row and date_bounds_row.min_date else ""],
-            "max_date": [str(date_bounds_row.max_date) if date_bounds_row and date_bounds_row.max_date else ""],
-            "subreddit": [str(row.subreddit) for row in subreddit_rows if row.subreddit],
-            "product": _distinct_tag_values("product"),
-            "issue": _distinct_tag_values("issue"),
-            "competitor": _distinct_tag_values("competitor"),
-        }
+            return {
+                "min_date": [str(date_bounds_row.min_date) if date_bounds_row and date_bounds_row.min_date else ""],
+                "max_date": [str(date_bounds_row.max_date) if date_bounds_row and date_bounds_row.max_date else ""],
+                "subreddit": [str(row.subreddit) for row in subreddit_rows if row.subreddit],
+                "product": _distinct_tag_values("product"),
+                "issue": _distinct_tag_values("issue"),
+                "competitor": _distinct_tag_values("competitor"),
+                "db_unavailable": ["false"],
+            }
+        except OperationalError:
+            return default_options
     finally:
         session.close()
 
 
 def _build_sidebar_filters() -> dict[str, Any]:
     options = _get_filter_options()
+    if options.get("db_unavailable", ["false"])[0] == "true":
+        st.warning("Database not initialized yet. Run initialization/refresh.")
+
     min_date = _coerce_date(options.get("min_date", [None])[0]) or date.today()
     max_date = _coerce_date(options.get("max_date", [None])[0]) or date.today()
 
