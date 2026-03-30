@@ -30,6 +30,14 @@ Searches, highlights and analyzes reviews for an app online.
 4. Optionally keep the default app theme/server behavior from `.streamlit/config.toml`.
 5. Add required secrets (see below), then deploy.
 
+### Database bootstrap & persistence notes
+- Streamlit/other cloud containers can start with an empty `data/app.db` on first boot (or after a cold restart on ephemeral instances).
+- The app now auto-bootstraps the SQLite schema during startup, so a missing/empty DB file is initialized automatically.
+- If startup bootstrap is disabled in your deployment, use one of these fallbacks:
+  - Run the Admin page refresh action to trigger initialization paths.
+  - Or run `python scripts/init_db.py` as a pre-deploy (or release) step.
+- Free-tier deployments commonly use ephemeral filesystem storage: DB files may be reset when the container is rebuilt/restarted unless you attach persistent storage.
+
 ## Secrets setup
 ### Local `.env`
 Use a local `.env` file for development. Required variables:
