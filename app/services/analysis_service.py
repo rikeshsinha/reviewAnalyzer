@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import hashlib
 from typing import Any
 
@@ -340,7 +340,13 @@ class AnalysisService:
             {**params, "evidence_limit": max(1, limit)},
         ).fetchall()
 
-        return [dict(row._mapping) for row in evidence_rows]
+        normalized: list[dict[str, Any]] = []
+        for row in evidence_rows:
+            item = dict(row._mapping)
+            url = str(item.get("url") or "").strip()
+            item["evidence_url"] = url or f"#document-{item.get('doc_id')}"
+            normalized.append(item)
+        return normalized
 
     def _generate_summary(self, module_name: str, metrics: dict[str, Any], evidence: list[dict[str, Any]]) -> str:
         if self.client is None:
@@ -401,7 +407,9 @@ class AnalysisService:
 
         cache_ttl_minutes = int(filters.get("cache_ttl_minutes") or self.config.cache_ttl_minutes)
         cache_key = self._make_cache_key(module_name, filters)
-        valid_after = (datetime.now(tz=UTC) - timedelta(minutes=max(1, cache_ttl_minutes))).strftime("%Y-%m-%d %H:%M:%S")
+        valid_after = (
+            datetime.now(tz=timezone.utc) - timedelta(minutes=max(1, cache_ttl_minutes))
+        ).strftime("%Y-%m-%d %H:%M:%S")
 
         row = self.session.execute(
             text(

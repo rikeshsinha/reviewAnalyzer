@@ -85,19 +85,22 @@ def render(filters: dict[str, Any]) -> None:
     c1, c2, c3 = st.columns(3)
     with c1:
         if st.button("Refresh Reddit ingestion"):
-            ok, logs = _run_command("app.jobs.refresh_reddit")
+            with st.spinner("Running Reddit ingestion job..."):
+                ok, logs = _run_command("app.jobs.refresh_reddit")
             (st.success if ok else st.error)("Refresh completed." if ok else "Refresh failed.")
             st.code(logs or "No output")
 
     with c2:
         if st.button("Run enrichment"):
-            ok, logs = _run_command("app.jobs.enrich_new_docs")
+            with st.spinner("Running enrichment job..."):
+                ok, logs = _run_command("app.jobs.enrich_new_docs")
             (st.success if ok else st.error)("Enrichment completed." if ok else "Enrichment failed.")
             st.code(logs or "No output")
 
     with c3:
         if st.button("Rebuild insight cache"):
-            ok, message = _rebuild_insight_cache(filters)
+            with st.spinner("Rebuilding insight cache..."):
+                ok, message = _rebuild_insight_cache(filters)
             (st.success if ok else st.error)(message)
 
     st.markdown("#### Ingestion run stats / errors")
@@ -105,11 +108,11 @@ def render(filters: dict[str, Any]) -> None:
     if ingestion_rows:
         st.dataframe(ingestion_rows, use_container_width=True)
     else:
-        st.info("No ingestion runs have been recorded yet.")
+        st.info("No ingestion runs yet. Run 'Refresh Reddit ingestion' to populate this table.")
 
     st.markdown("#### Enrichment run stats / errors")
     enrichment_rows = _load_last_enrichment_runs()
     if enrichment_rows:
         st.dataframe(enrichment_rows, use_container_width=True)
     else:
-        st.info("No enrichment runs have been recorded yet.")
+        st.info("No enrichment runs yet. Run 'Run enrichment' after ingestion to populate this table.")

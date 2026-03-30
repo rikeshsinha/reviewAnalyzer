@@ -69,6 +69,16 @@ feature_aliases:
         self.assertIn(("competitor", "google_wearables", "rules"), flattened)
         self.assertIn(("feature", "notifications", "rules"), flattened)
 
+    def test_key_aliases_map_to_expected_canonical_tags(self) -> None:
+        text = "Pixel watch users report battery dies fast, but samsung watch alerts are good."
+        all_tags = self.service.extract_all_tags(text)
+        flat = {(tag["tag_type"], tag["tag_value"]) for tag in all_tags}
+
+        self.assertIn(("product", "galaxy watch"), flat)
+        self.assertIn(("issue", "battery drain"), flat)
+        self.assertIn(("competitor", "google_wearables"), flat)
+        self.assertIn(("feature", "notifications"), flat)
+
 
 if __name__ == "__main__":
     unittest.main()

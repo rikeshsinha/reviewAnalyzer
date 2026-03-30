@@ -141,3 +141,94 @@ def test_get_documents_by_ids_preserves_input_order() -> None:
 
     fetched = service.get_documents_by_ids([ids[2], ids[0]])
     assert [row["id"] for row in fetched] == [ids[2], ids[0]]
+
+
+def test_search_documents_filter_logic_source_date_and_sentiment() -> None:
+    session = _build_session()
+    service = RetrievalService(session)
+
+    reddit_source_id = int(
+        session.execute(
+            text(
+                """
+                INSERT INTO sources (platform, external_id, name, metadata_json)
+                VALUES ('reddit', 'reddit', 'reddit', '{}')
+                """
+            )
+        ).lastrowid
+    )
+    forum_source_id = int(
+        session.execute(
+            text(
+                """
+                INSERT INTO sources (platform, external_id, name, metadata_json)
+                VALUES ('forum', 'forum', 'forum', '{}')
+                """
+            )
+        ).lastrowid
+    )
+
+    matching_doc_id = int(
+        session.execute(
+            text(
+                """
+                INSERT INTO documents (source_id, external_id, title, body, author, url, published_at, raw_json)
+                VALUES (:source_id, 'd1', 'Battery issues', 'battery drains quickly', 'u1', 'http://x/1', :published_at, :raw_json)
+                """
+            ),
+            {
+                "source_id": reddit_source_id,
+                "published_at": "2026-03-12T09:00:00",
+                "raw_json": json.dumps({"subreddit": "android"}),
+            },
+        ).lastrowid
+    )
+    non_matching_doc_id = int(
+        session.execute(
+            text(
+                """
+                INSERT INTO documents (source_id, external_id, title, body, author, url, published_at, raw_json)
+                VALUES (:source_id, 'd2', 'Battery note', 'battery drains quickly', 'u2', 'http://x/2', :published_at, :raw_json)
+                """
+            ),
+            {
+                "source_id": forum_source_id,
+                "published_at": "2026-03-20T09:00:00",
+                "raw_json": json.dumps({"subreddit": "android"}),
+            },
+        ).lastrowid
+    )
+
+    session.execute(
+        text(
+            """
+            INSERT INTO enrichments (document_id, metadata_json)
+            VALUES (:document_id, :metadata_json)
+            """
+        ),
+        {"document_id": matching_doc_id, "metadata_json": json.dumps({"sentiment_label": "negative"})},
+    )
+    session.execute(
+        text(
+            """
+            INSERT INTO enrichments (document_id, metadata_json)
+            VALUES (:document_id, :metadata_json)
+            """
+        ),
+        {"document_id": non_matching_doc_id, "metadata_json": json.dumps({"sentiment_label": "positive"})},
+    )
+    session.commit()
+
+    results = service.search_documents(
+        query="battery",
+        filters={
+            "source": "reddit",
+            "date_from": "2026-03-10",
+            "date_to": "2026-03-15",
+            "sentiment_label": "negative",
+        },
+        limit=20,
+        offset=0,
+    )
+
+    assert [row["external_id"] for row in results] == ["d1"]
