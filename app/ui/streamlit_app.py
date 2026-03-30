@@ -8,7 +8,7 @@ from typing import Any
 import streamlit as st
 from sqlalchemy import text
 
-from app.db.session import SessionLocal
+from app.db.session import SessionLocal, bootstrap_database
 from app.ui.pages import admin, ask, dashboard, explorer, insights
 
 
@@ -111,6 +111,10 @@ def _build_sidebar_filters() -> dict[str, Any]:
 def main() -> None:
     st.set_page_config(page_title="Review Analyzer", layout="wide")
     st.title("Review Analyzer UI")
+
+    if not st.session_state.get("_db_bootstrapped", False):
+        bootstrap_database()
+        st.session_state["_db_bootstrapped"] = True
 
     st.session_state["global_filters"] = _build_sidebar_filters()
 
