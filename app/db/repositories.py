@@ -96,3 +96,58 @@ class IngestionRunRepository:
             },
         )
         self.session.commit()
+
+
+class EnrichmentRunRepository:
+    """Persistence helpers for the enrichment_runs table."""
+
+    def __init__(self, session: Session) -> None:
+        self.session = session
+
+    def start_run(self) -> int:
+        query = text(
+            """
+            INSERT INTO enrichment_runs (status)
+            VALUES ('running')
+            """
+        )
+        result = self.session.execute(query)
+        self.session.commit()
+        return int(result.lastrowid)
+
+    def complete_run(
+        self,
+        run_id: int,
+        candidates: int,
+        enriched: int,
+        skipped_short: int,
+        failed_batches: int,
+        status: str = "completed",
+        error_message: str | None = None,
+    ) -> None:
+        query = text(
+            """
+            UPDATE enrichment_runs
+            SET completed_at = CURRENT_TIMESTAMP,
+                status = :status,
+                candidates = :candidates,
+                enriched = :enriched,
+                skipped_short = :skipped_short,
+                failed_batches = :failed_batches,
+                error_message = :error_message
+            WHERE id = :run_id
+            """
+        )
+        self.session.execute(
+            query,
+            {
+                "run_id": run_id,
+                "status": status,
+                "candidates": candidates,
+                "enriched": enriched,
+                "skipped_short": skipped_short,
+                "failed_batches": failed_batches,
+                "error_message": error_message,
+            },
+        )
+        self.session.commit()

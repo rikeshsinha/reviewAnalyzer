@@ -3,14 +3,19 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Any
 
 from sqlalchemy import text
 
+from app.db.repositories import IngestionRunRepository
 from app.db.session import SessionLocal
 from app.ingestion.reddit_ingestor import RedditIngestor
+from app.utils.logging_config import setup_logging
+
+logger = logging.getLogger(__name__)
 
 
 def _load_source_config() -> tuple[list[str], list[str]]:
@@ -70,18 +75,13 @@ def _ensure_dedupe_constraints(session: Any) -> None:
             "ON documents(source_id, external_id)"
         )
     )
-    session.execute(
-        text(
-            "ALTER TABLE documents ADD COLUMN dedupe_key TEXT"
-        )
-    )
+    session.execute(text("ALTER TABLE documents ADD COLUMN dedupe_key TEXT"))
 
 
 def _safe_ensure_dedupe_constraints(session: Any) -> None:
     try:
         _ensure_dedupe_constraints(session)
     except Exception:
-        # Column may already exist in most runs.
         session.rollback()
         session.execute(
             text(
@@ -89,9 +89,7 @@ def _safe_ensure_dedupe_constraints(session: Any) -> None:
                 "ON documents(source_id, external_id)"
             )
         )
-    session.execute(
-        text("CREATE UNIQUE INDEX IF NOT EXISTS ux_documents_dedupe_key ON documents(dedupe_key)")
-    )
+    session.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ux_documents_dedupe_key ON documents(dedupe_key)"))
     session.commit()
 
 
@@ -141,11 +139,13 @@ def _insert_documents(session: Any, source_id: int, docs: list[dict[str, Any]]) 
 def run() -> None:
     """Run Reddit ingestion for the previous 30 days and persist run stats."""
 
+    setup_logging()
     subreddits, keywords = _load_source_config()
     if not subreddits:
         raise RuntimeError("No subreddits configured. Set REDDIT_SUBREDDITS or source_config.yaml")
 
     session = SessionLocal()
+    run_repo = IngestionRunRepository(session)
     run_id: int | None = None
 
     try:
@@ -153,54 +153,36 @@ def run() -> None:
         source_id = _ensure_reddit_source(session)
         session.commit()
 
-        run_id = int(
-            session.execute(
-                text(
-                    "INSERT INTO ingestion_runs (source_name, status) VALUES ('reddit', 'running')"
-                )
-            ).lastrowid
-        )
-        session.commit()
+        run_id = run_repo.start_run(source_name="reddit")
 
         ingestor = RedditIngestor()
         docs, stats = ingestor.run(subreddits=subreddits, keywords=keywords, days_back=30)
         inserted = _insert_documents(session, source_id, docs)
 
-        session.execute(
-            text(
-                """
-                UPDATE ingestion_runs
-                SET completed_at = CURRENT_TIMESTAMP,
-                    status = 'completed',
-                    records_fetched = :records_fetched,
-                    records_inserted = :records_inserted
-                WHERE id = :run_id
-                """
-            ),
-            {
-                "run_id": run_id,
+        run_repo.complete_run(
+            run_id=run_id,
+            records_fetched=stats.docs_emitted,
+            records_inserted=inserted,
+            status="completed",
+        )
+        logger.info(
+            "reddit refresh completed",
+            extra={
                 "records_fetched": stats.docs_emitted,
                 "records_inserted": inserted,
+                "subreddits": subreddits,
             },
         )
-        session.commit()
-
-        print(f"reddit refresh completed: fetched={stats.docs_emitted} inserted={inserted}")
     except Exception as exc:
         if run_id is not None:
-            session.execute(
-                text(
-                    """
-                    UPDATE ingestion_runs
-                    SET completed_at = CURRENT_TIMESTAMP,
-                        status = 'failed',
-                        error_message = :error_message
-                    WHERE id = :run_id
-                    """
-                ),
-                {"run_id": run_id, "error_message": str(exc)},
+            run_repo.complete_run(
+                run_id=run_id,
+                records_fetched=0,
+                records_inserted=0,
+                status="failed",
+                error_message=str(exc),
             )
-            session.commit()
+        logger.exception("reddit refresh failed")
         raise
     finally:
         session.close()
