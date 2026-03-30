@@ -26,7 +26,7 @@ Searches, highlights and analyzes reviews for an app online.
 ## Streamlit Community Cloud deploy
 1. Push this repo to GitHub.
 2. In Streamlit Community Cloud, create a new app from this repo.
-3. Set **Main file path** to `app/ui/streamlit_app.py`.
+3. Set **Main file path** to `streamlit_app.py`.
 4. Optionally keep the default app theme/server behavior from `.streamlit/config.toml`.
 5. Add required secrets (see below), then deploy.
 
