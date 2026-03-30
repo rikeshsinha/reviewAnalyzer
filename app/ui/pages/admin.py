@@ -14,7 +14,7 @@ from app.services.analysis_service import AnalysisService
 
 
 @st.cache_data(ttl=30)
-def _load_last_run_stats() -> list[dict[str, Any]]:
+def _load_last_ingestion_runs() -> list[dict[str, Any]]:
     session = SessionLocal()
     try:
         rows = session.execute(
@@ -23,6 +23,26 @@ def _load_last_run_stats() -> list[dict[str, Any]]:
                 SELECT id, source_name, started_at, completed_at, status,
                        records_fetched, records_inserted, error_message
                 FROM ingestion_runs
+                ORDER BY id DESC
+                LIMIT 10
+                """
+            )
+        ).fetchall()
+        return [dict(row._mapping) for row in rows]
+    finally:
+        session.close()
+
+
+@st.cache_data(ttl=30)
+def _load_last_enrichment_runs() -> list[dict[str, Any]]:
+    session = SessionLocal()
+    try:
+        rows = session.execute(
+            text(
+                """
+                SELECT id, started_at, completed_at, status,
+                       candidates, enriched, skipped_short, failed_batches, error_message
+                FROM enrichment_runs
                 ORDER BY id DESC
                 LIMIT 10
                 """
@@ -80,9 +100,16 @@ def render(filters: dict[str, Any]) -> None:
             ok, message = _rebuild_insight_cache(filters)
             (st.success if ok else st.error)(message)
 
-    st.markdown("#### Last run stats / errors")
-    rows = _load_last_run_stats()
-    if rows:
-        st.dataframe(rows, use_container_width=True)
+    st.markdown("#### Ingestion run stats / errors")
+    ingestion_rows = _load_last_ingestion_runs()
+    if ingestion_rows:
+        st.dataframe(ingestion_rows, use_container_width=True)
     else:
         st.info("No ingestion runs have been recorded yet.")
+
+    st.markdown("#### Enrichment run stats / errors")
+    enrichment_rows = _load_last_enrichment_runs()
+    if enrichment_rows:
+        st.dataframe(enrichment_rows, use_container_width=True)
+    else:
+        st.info("No enrichment runs have been recorded yet.")

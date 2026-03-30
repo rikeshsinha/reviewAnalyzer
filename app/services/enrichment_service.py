@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -17,6 +18,8 @@ from app.prompts.feature_requests import FEATURE_REQUESTS_INSTRUCTIONS
 from app.prompts.sentiment import SENTIMENT_INSTRUCTIONS, SENTIMENT_PROMPT_VERSION
 
 _ALLOWED_SENTIMENT_LABELS = {"positive", "neutral", "negative", "mixed"}
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -40,7 +43,7 @@ class EnrichmentService:
     def enrich_new_documents(self) -> dict[str, int]:
         documents = self._fetch_documents_missing_enrichment(limit=self.config.max_docs_per_run)
         if not documents:
-            return {"candidates": 0, "enriched": 0, "skipped_short": 0}
+            return {"candidates": 0, "enriched": 0, "skipped_short": 0, "failed_batches": 0}
 
         processable: list[dict[str, Any]] = []
         skipped_short = 0
@@ -52,13 +55,19 @@ class EnrichmentService:
             processable.append({**doc, "prepared_text": prepared_text[: self.config.max_text_chars]})
 
         enriched_count = 0
+        failed_batches = 0
         for batch in self._batched(processable, batch_size=self.config.batch_size):
-            enriched_count += self._enrich_batch(batch)
+            try:
+                enriched_count += self._enrich_batch(batch)
+            except Exception:  # noqa: BLE001
+                failed_batches += 1
+                logger.exception("Enrichment batch failed", extra={"batch_size": len(batch)})
 
         return {
             "candidates": len(documents),
             "enriched": enriched_count,
             "skipped_short": skipped_short,
+            "failed_batches": failed_batches,
         }
 
     def _fetch_documents_missing_enrichment(self, limit: int) -> list[dict[str, Any]]:

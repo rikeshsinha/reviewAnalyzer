@@ -58,6 +58,19 @@ CREATE TABLE IF NOT EXISTS ingestion_runs (
     error_message TEXT
 );
 
+
+CREATE TABLE IF NOT EXISTS enrichment_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    completed_at TEXT,
+    status TEXT NOT NULL,
+    candidates INTEGER NOT NULL DEFAULT 0,
+    enriched INTEGER NOT NULL DEFAULT 0,
+    skipped_short INTEGER NOT NULL DEFAULT 0,
+    failed_batches INTEGER NOT NULL DEFAULT 0,
+    error_message TEXT
+);
+
 CREATE TABLE IF NOT EXISTS saved_insights (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     title TEXT NOT NULL,
