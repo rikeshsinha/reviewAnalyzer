@@ -91,6 +91,26 @@ In the Streamlit **Admin** page:
 - Manual refresh is recommended **1–2 times per week**.
 - Increase to daily during launches/incidents.
 
+## Demo checklist
+1. **Seed DB**
+   ```bash
+   python scripts/init_db.py
+   ```
+2. **Run enrichment pipeline inputs**
+   ```bash
+   python -m app.jobs.refresh_reddit
+   python -m app.jobs.enrich_new_docs
+   ```
+3. **Run app**
+   ```bash
+   streamlit run app/ui/streamlit_app.py
+   ```
+4. **Sample demo questions**
+   - "What are the top complaints this month for the selected subreddit?"
+   - "Which features are most requested in the last 14 days?"
+   - "Summarize negative sentiment themes and cite evidence links."
+   - "What changed week-over-week in complaint volume?"
+
 ## Troubleshooting
 ### API/auth errors
 - `401`/auth failures: verify all required secrets are present and not wrapped in stray quotes.

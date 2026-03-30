@@ -31,7 +31,8 @@ def render(filters: dict[str, Any]) -> None:
     page_number = st.number_input("Page", min_value=1, value=1, step=1)
 
     offset = (int(page_number) - 1) * int(page_size)
-    rows = _search(query, filters, page_size, offset)
+    with st.spinner("Searching documents..."):
+        rows = _search(query, filters, page_size, offset)
 
     table_rows = []
     for row in rows:
@@ -47,6 +48,8 @@ def render(filters: dict[str, Any]) -> None:
         )
 
     df = pd.DataFrame(table_rows)
+    if df.empty:
+        st.info("No documents found for this query/filter combination.")
     st.dataframe(df, use_container_width=True)
 
     csv_buffer = StringIO()
@@ -59,6 +62,8 @@ def render(filters: dict[str, Any]) -> None:
     )
 
     st.markdown("#### Source links")
-    for row in table_rows:
-        if row.get("source_url"):
-            st.markdown(f"- [{row.get('title') or row.get('id')}]({row['source_url']})")
+    links = [row for row in table_rows if row.get("source_url")]
+    if not links:
+        st.info("No source links available on this page of results.")
+    for row in links:
+        st.markdown(f"- [{row.get('title') or row.get('id')}]({row['source_url']})")

@@ -132,7 +132,8 @@ def _load_dashboard_data(filters: dict[str, Any]) -> dict[str, Any]:
 
 def render(filters: dict[str, Any]) -> None:
     st.subheader("Dashboard")
-    payload = _load_dashboard_data(filters)
+    with st.spinner("Loading dashboard analytics..."):
+        payload = _load_dashboard_data(filters)
 
     totals = payload["totals"]
     a, b, c, d = st.columns(4)
@@ -152,7 +153,10 @@ def render(filters: dict[str, Any]) -> None:
     complaints_df = pd.DataFrame(payload["complaints"])
     with left:
         st.markdown("#### Top complaints")
-        st.dataframe(complaints_df if not complaints_df.empty else pd.DataFrame(columns=["issue", "mentions"]))
+        if complaints_df.empty:
+            st.info("No complaint tags matched these filters yet.")
+        else:
+            st.dataframe(complaints_df, use_container_width=True)
 
     sentiment_df = pd.DataFrame(payload["sentiment"])
     with right:

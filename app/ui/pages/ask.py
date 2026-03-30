@@ -44,11 +44,12 @@ def render(filters: dict[str, Any]) -> None:
 
     if st.button("Ask", type="primary"):
         if not query.strip():
-            st.warning("Please enter a question.")
+            st.warning("Please enter a question to run retrieval + answer generation.")
             return
 
         try:
-            result = _run_qa(query.strip(), filters, limit)
+            with st.spinner("Gathering evidence and generating answer..."):
+                result = _run_qa(query.strip(), filters, limit)
         except RuntimeError as exc:
             st.error(f"Missing configuration: {exc}")
             return
@@ -70,7 +71,7 @@ def render(filters: dict[str, Any]) -> None:
         st.markdown("#### Evidence used")
         evidence_items = result.get("evidence") or []
         if not evidence_items:
-            st.info("No evidence available for this query + filter set.")
+            st.info("No evidence available for this query and filters. Try broadening source or date range.")
             return
 
         for item in evidence_items:
