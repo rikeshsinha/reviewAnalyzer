@@ -24,6 +24,11 @@ def test_normalize_submission_output_shape() -> None:
     assert normalized["title"] == "Battery issue"
     assert normalized["content"] == "Drains overnight"
     assert normalized["source"] == "reddit"
+    assert normalized["platform"] == "reddit"
+    assert normalized["entity_type"] == "post"
+    assert normalized["community_or_channel"] == "android"
+    assert normalized["platform_metadata"]["subreddit"] == "android"
+    assert normalized["platform_metadata"]["parent_external_id"] is None
     assert isinstance(normalized["raw_payload"], dict)
 
 
@@ -44,6 +49,10 @@ def test_normalize_comment_output_shape() -> None:
     assert normalized["doc_type"] == "comment"
     assert normalized["external_id"] == "c_1"
     assert normalized["parent_external_id"] == "sub_parent"
+    assert normalized["entity_type"] == "comment"
+    assert normalized["community_or_channel"] == "android"
+    assert normalized["platform_metadata"]["subreddit"] == "android"
+    assert normalized["platform_metadata"]["parent_external_id"] == "sub_parent"
     assert normalized["title"] is None
     assert normalized["content"] == "Same here"
     assert normalized["url"].startswith("https://reddit.com/")

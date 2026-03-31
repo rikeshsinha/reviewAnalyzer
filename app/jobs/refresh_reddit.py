@@ -73,9 +73,14 @@ def _insert_documents(session: Any, source_id: int, docs: list[dict[str, Any]]) 
             "published_at": doc.get("created_at"),
             "raw_json": json.dumps(
                 {
-                    "parent_external_id": doc.get("parent_external_id"),
-                    "doc_type": doc.get("doc_type"),
-                    "subreddit": doc.get("subreddit"),
+                    "platform": doc.get("platform") or doc.get("source"),
+                    "entity_type": doc.get("entity_type") or doc.get("doc_type"),
+                    "community_or_channel": doc.get("community_or_channel") or doc.get("subreddit"),
+                    "platform_metadata": doc.get("platform_metadata")
+                    or {
+                        "subreddit": doc.get("subreddit"),
+                        "parent_external_id": doc.get("parent_external_id"),
+                    },
                     "ingestion_ts": doc.get("ingestion_ts"),
                     "dedupe_key": doc.get("dedupe_key"),
                     "raw_payload": doc.get("raw_payload"),
