@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
 
+from app.ingestion.base import BaseIngestionAdapter
 from app.ingestion.normalizers import normalize_comment, normalize_submission
 from app.ingestion.reddit_client import get_reddit_client
 
@@ -18,11 +19,20 @@ class IngestionStats:
     docs_emitted: int = 0
 
 
-class RedditIngestor:
+class RedditIngestor(BaseIngestionAdapter):
     """Coordinates Reddit fetch/search/comment collection."""
 
     def __init__(self, client: Any | None = None) -> None:
         self.client = client or get_reddit_client()
+
+    @property
+    def platform_name(self) -> str:
+        return "reddit"
+
+    def validate_config(self, config: dict[str, Any]) -> None:
+        subreddits = config.get("subreddits")
+        if not isinstance(subreddits, list) or not subreddits:
+            raise ValueError("Reddit config requires non-empty list: subreddits")
 
     def fetch_subreddit_posts(
         self,
@@ -88,14 +98,16 @@ class RedditIngestor:
 
     def run(
         self,
-        *,
-        subreddits: Iterable[str],
-        keywords: Iterable[str],
-        days_back: int = 30,
-        post_limit: int = 200,
-        comment_limit: int = 200,
+        config: dict[str, Any],
+        days_back: int,
     ) -> tuple[list[dict[str, Any]], IngestionStats]:
         """Execute ingest/search/comment stages and return normalized docs."""
+
+        self.validate_config(config)
+        subreddits = config.get("subreddits", [])
+        keywords = config.get("keywords", [])
+        post_limit = int(config.get("post_limit", 200))
+        comment_limit = int(config.get("comment_limit", 200))
 
         stats = IngestionStats()
         recent_posts = self.fetch_subreddit_posts(subreddits, days_back=days_back, limit=post_limit)

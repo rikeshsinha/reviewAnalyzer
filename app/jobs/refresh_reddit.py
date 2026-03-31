@@ -1,4 +1,4 @@
-"""Job entry point for Reddit refresh ingestion."""
+"""Job entry point for refresh ingestion by platform key."""
 
 from __future__ import annotations
 
@@ -12,13 +12,13 @@ from sqlalchemy import text
 
 from app.db.repositories import IngestionRunRepository
 from app.db.session import SessionLocal
-from app.ingestion.reddit_ingestor import RedditIngestor
+from app.ingestion.registry import get_adapter_class
 from app.utils.logging_config import setup_logging
 
 logger = logging.getLogger(__name__)
 
 
-def _load_source_config() -> tuple[list[str], list[str]]:
+def _load_reddit_source_config() -> tuple[list[str], list[str]]:
     """Load subreddits/keywords from env with fallback to source_config.yaml."""
 
     env_subreddits = [s.strip() for s in os.getenv("REDDIT_SUBREDDITS", "").split(",") if s.strip()]
@@ -140,9 +140,11 @@ def run() -> None:
     """Run Reddit ingestion for the previous 30 days and persist run stats."""
 
     setup_logging()
-    subreddits, keywords = _load_source_config()
+    subreddits, keywords = _load_reddit_source_config()
     if not subreddits:
         raise RuntimeError("No subreddits configured. Set REDDIT_SUBREDDITS or source_config.yaml")
+
+    platform = os.getenv("INGEST_PLATFORM", "reddit").strip().lower()
 
     session = SessionLocal()
     run_repo = IngestionRunRepository(session)
@@ -153,10 +155,14 @@ def run() -> None:
         source_id = _ensure_reddit_source(session)
         session.commit()
 
-        run_id = run_repo.start_run(source_name="reddit")
+        run_id = run_repo.start_run(source_name=platform)
 
-        ingestor = RedditIngestor()
-        docs, stats = ingestor.run(subreddits=subreddits, keywords=keywords, days_back=30)
+        adapter_class = get_adapter_class(platform)
+        ingestor = adapter_class()
+        docs, stats = ingestor.run(
+            config={"subreddits": subreddits, "keywords": keywords},
+            days_back=30,
+        )
         inserted = _insert_documents(session, source_id, docs)
 
         run_repo.complete_run(
@@ -166,7 +172,7 @@ def run() -> None:
             status="completed",
         )
         logger.info(
-            "reddit refresh completed",
+            f"{platform} refresh completed",
             extra={
                 "records_fetched": stats.docs_emitted,
                 "records_inserted": inserted,
@@ -182,7 +188,7 @@ def run() -> None:
                 status="failed",
                 error_message=str(exc),
             )
-        logger.exception("reddit refresh failed")
+        logger.exception(f"{platform} refresh failed")
         raise
     finally:
         session.close()
