@@ -94,8 +94,17 @@ What it does:
 In the Streamlit **Admin** page:
 - run ingestion/enrichment jobs manually
 - inspect latest ingestion and enrichment run tables with status/errors
+- edit Reddit list fields (communities/keywords) and click **Save config** to write runtime overrides in `data/runtime_source_config.yaml`
 
-### 5) Recommended refresh cadence
+### 5) Source config refresh flow (exact)
+1. Edit list fields in the **Admin** page.
+2. Click **Save config** (writes runtime overrides to `data/runtime_source_config.yaml`).
+3. Run refresh (`python -m app.jobs.refresh_sources` or Admin refresh button). Each refresh run merges:
+   - base config: `app/config/source_config.yaml`
+   - runtime overrides: `data/runtime_source_config.yaml` (if present)
+   with list replacement + scalar override semantics.
+
+### 6) Recommended refresh cadence
 - Manual refresh is recommended **1–2 times per week**.
 - Increase to daily during launches/incidents.
 
