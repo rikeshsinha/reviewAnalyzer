@@ -48,10 +48,16 @@ def normalize_submission(raw_submission: Any) -> dict[str, Any]:
 
     return {
         "source": SOURCE,
+        "platform": SOURCE,
         "external_id": external_id,
         "parent_external_id": None,
         "doc_type": "post",
-        "subreddit": str(getattr(raw_submission, "subreddit", "")) or None,
+        "entity_type": "post",
+        "community_or_channel": str(getattr(raw_submission, "subreddit", "")) or None,
+        "platform_metadata": {
+            "subreddit": str(getattr(raw_submission, "subreddit", "")) or None,
+            "parent_external_id": None,
+        },
         "author": _author_name(raw_submission),
         "title": title,
         "content": content,
@@ -80,10 +86,16 @@ def normalize_comment(raw_comment: Any, parent_submission: Any = None) -> dict[s
 
     return {
         "source": SOURCE,
+        "platform": SOURCE,
         "external_id": external_id,
         "parent_external_id": parent_external_id,
         "doc_type": "comment",
-        "subreddit": str(getattr(raw_comment, "subreddit", "")) or None,
+        "entity_type": "comment",
+        "community_or_channel": str(getattr(raw_comment, "subreddit", "")) or None,
+        "platform_metadata": {
+            "subreddit": str(getattr(raw_comment, "subreddit", "")) or None,
+            "parent_external_id": parent_external_id,
+        },
         "author": _author_name(raw_comment),
         "title": None,
         "content": content,
