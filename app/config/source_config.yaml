@@ -1,11 +1,10 @@
-subreddits:
-  - iosapps
-  - androidapps
-  - SaaS
-  - startups
-keywords:
-  - review
-  - feedback
-  - bug
-  - feature request
-  - pricing
+platforms:
+  reddit:
+    enabled: true
+    communities: ["GalaxyWatch", "samsung", "wearables", "Android", "Smartwatch"]
+    keywords: ["Samsung Health", "Galaxy Watch", "Galaxy Ring", "sleep", "workout"]
+    days_back: 30
+  google_play:
+    enabled: false
+    apps: []
+    keywords: []

@@ -1,11 +1,9 @@
-"""Job entry point for refresh ingestion by platform key."""
+"""Job entry point for running a single platform ingestion refresh."""
 
 from __future__ import annotations
 
 import json
 import logging
-import os
-from pathlib import Path
 from typing import Any
 
 from sqlalchemy import text
@@ -18,53 +16,22 @@ from app.utils.logging_config import setup_logging
 logger = logging.getLogger(__name__)
 
 
-def _load_reddit_source_config() -> tuple[list[str], list[str]]:
-    """Load subreddits/keywords from env with fallback to source_config.yaml."""
-
-    env_subreddits = [s.strip() for s in os.getenv("REDDIT_SUBREDDITS", "").split(",") if s.strip()]
-    env_keywords = [k.strip() for k in os.getenv("REDDIT_KEYWORDS", "").split(",") if k.strip()]
-    if env_subreddits:
-        return env_subreddits, env_keywords
-
-    config_path = Path(__file__).resolve().parents[1] / "config" / "source_config.yaml"
-    subreddits: list[str] = []
-    keywords: list[str] = []
-    section: str | None = None
-
-    if not config_path.exists():
-        return subreddits, keywords
-
-    for raw_line in config_path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if line.endswith(":"):
-            section = line[:-1]
-            continue
-        if line.startswith("-") and section in {"subreddits", "keywords"}:
-            value = line[1:].strip()
-            if section == "subreddits":
-                subreddits.append(value)
-            else:
-                keywords.append(value)
-
-    return subreddits, keywords
-
-
-def _ensure_reddit_source(session: Any) -> int:
+def _ensure_source(session: Any, platform: str) -> int:
     session.execute(
         text(
             """
             INSERT OR IGNORE INTO sources (platform, external_id, name, metadata_json)
-            VALUES ('reddit', 'reddit', 'Reddit', '{}')
+            VALUES (:platform, :platform, :name, '{}')
             """
-        )
+        ),
+        {"platform": platform, "name": platform.replace("_", " ").title()},
     )
     row = session.execute(
-        text("SELECT id FROM sources WHERE platform='reddit' AND external_id='reddit' LIMIT 1")
+        text("SELECT id FROM sources WHERE platform=:platform AND external_id=:platform LIMIT 1"),
+        {"platform": platform},
     ).first()
     if row is None:
-        raise RuntimeError("Unable to resolve reddit source row")
+        raise RuntimeError(f"Unable to resolve source row for platform '{platform}'")
     return int(row.id)
 
 
@@ -136,15 +103,8 @@ def _insert_documents(session: Any, source_id: int, docs: list[dict[str, Any]]) 
     return inserted
 
 
-def run() -> None:
-    """Run Reddit ingestion for the previous 30 days and persist run stats."""
-
-    setup_logging()
-    subreddits, keywords = _load_reddit_source_config()
-    if not subreddits:
-        raise RuntimeError("No subreddits configured. Set REDDIT_SUBREDDITS or source_config.yaml")
-
-    platform = os.getenv("INGEST_PLATFORM", "reddit").strip().lower()
+def run_for_platform(platform: str, config: dict[str, Any], *, days_back: int) -> dict[str, int]:
+    """Run ingestion for a single platform and return run counters."""
 
     session = SessionLocal()
     run_repo = IngestionRunRepository(session)
@@ -152,17 +112,14 @@ def run() -> None:
 
     try:
         _safe_ensure_dedupe_constraints(session)
-        source_id = _ensure_reddit_source(session)
+        source_id = _ensure_source(session, platform)
         session.commit()
 
         run_id = run_repo.start_run(source_name=platform)
-
         adapter_class = get_adapter_class(platform)
         ingestor = adapter_class()
-        docs, stats = ingestor.run(
-            config={"subreddits": subreddits, "keywords": keywords},
-            days_back=30,
-        )
+
+        docs, stats = ingestor.run(config=config, days_back=days_back)
         inserted = _insert_documents(session, source_id, docs)
 
         run_repo.complete_run(
@@ -172,13 +129,11 @@ def run() -> None:
             status="completed",
         )
         logger.info(
-            f"{platform} refresh completed",
-            extra={
-                "records_fetched": stats.docs_emitted,
-                "records_inserted": inserted,
-                "subreddits": subreddits,
-            },
+            "%s refresh completed",
+            platform,
+            extra={"records_fetched": stats.docs_emitted, "records_inserted": inserted},
         )
+        return {"records_fetched": stats.docs_emitted, "records_inserted": inserted}
     except Exception as exc:
         if run_id is not None:
             run_repo.complete_run(
@@ -188,10 +143,24 @@ def run() -> None:
                 status="failed",
                 error_message=str(exc),
             )
-        logger.exception(f"{platform} refresh failed")
+        logger.exception("%s refresh failed", platform)
         raise
     finally:
         session.close()
+
+
+def run() -> None:
+    """Backward-compatible reddit-only refresh entrypoint."""
+
+    from app.config.source_loader import get_enabled_platform_configs
+
+    setup_logging()
+    configs = [config for config in get_enabled_platform_configs() if config.platform == "reddit"]
+    if not configs:
+        raise RuntimeError("Reddit platform is not enabled in source_config.yaml")
+
+    reddit_config = configs[0]
+    run_for_platform("reddit", reddit_config.config, days_back=reddit_config.days_back)
 
 
 if __name__ == "__main__":

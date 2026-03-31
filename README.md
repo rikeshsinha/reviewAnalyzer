@@ -72,7 +72,7 @@ REDDIT_USER_AGENT = "reviewAnalyzer/0.1 by u/<reddit_username>"
 
 ### 2) Run ingestion (Reddit refresh)
 ```bash
-python -m app.jobs.refresh_reddit
+python -m app.jobs.refresh_sources
 ```
 What it does:
 - fetches the last 30 days from configured subreddits
@@ -106,7 +106,7 @@ In the Streamlit **Admin** page:
    ```
 2. **Run enrichment pipeline inputs**
    ```bash
-   python -m app.jobs.refresh_reddit
+   python -m app.jobs.refresh_sources
    python -m app.jobs.enrich_new_docs
    ```
 3. **Run app**
