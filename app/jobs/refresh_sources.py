@@ -17,7 +17,7 @@ def run() -> None:
     setup_logging()
     enabled_configs = get_enabled_platform_configs()
     if not enabled_configs:
-        raise RuntimeError("No enabled platforms found in source_config.yaml")
+        raise RuntimeError("No enabled platforms found in merged source configuration")
 
     for platform_config in enabled_configs:
         logger.info("Starting refresh for platform %s", platform_config.platform)

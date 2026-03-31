@@ -157,7 +157,7 @@ def run() -> None:
     setup_logging()
     configs = [config for config in get_enabled_platform_configs() if config.platform == "reddit"]
     if not configs:
-        raise RuntimeError("Reddit platform is not enabled in source_config.yaml")
+        raise RuntimeError("Reddit platform is not enabled in merged source configuration")
 
     reddit_config = configs[0]
     run_for_platform("reddit", reddit_config.config, days_back=reddit_config.days_back)
