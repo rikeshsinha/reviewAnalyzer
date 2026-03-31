@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from app.config import source_loader
 from app.config.source_loader import SourceConfigError, get_enabled_platform_configs, load_source_config
 
 
@@ -72,3 +73,38 @@ platforms:
 
     with pytest.raises(SourceConfigError):
         load_source_config(config_path)
+
+
+def test_load_source_config_uses_runtime_file_when_present(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    base_path = tmp_path / "source_config.yaml"
+    runtime_path = tmp_path / "runtime_source_config.yaml"
+
+    base_path.write_text(
+        """
+platforms:
+  reddit:
+    enabled: true
+    communities: ["BaseOnly"]
+    keywords: []
+""".strip(),
+        encoding="utf-8",
+    )
+    runtime_path.write_text(
+        """
+platforms:
+  reddit:
+    enabled: true
+    communities: ["RuntimeOnly"]
+    keywords: []
+""".strip(),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(source_loader, "BASE_SOURCE_CONFIG_PATH", base_path)
+    monkeypatch.setattr(source_loader, "RUNTIME_SOURCE_CONFIG_PATH", runtime_path)
+
+    configs = load_source_config()
+
+    assert configs[0].config["subreddits"] == ["RuntimeOnly"]
