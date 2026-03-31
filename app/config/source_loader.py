@@ -7,6 +7,10 @@ from pathlib import Path
 from typing import Any
 
 
+BASE_SOURCE_CONFIG_PATH = Path(__file__).resolve().parent / "source_config.yaml"
+RUNTIME_SOURCE_CONFIG_PATH = Path("data/runtime_source_config.yaml")
+
+
 @dataclass(frozen=True)
 class PlatformSourceConfig:
     """Normalized platform ingestion configuration."""
@@ -128,7 +132,7 @@ def _normalize_platform_config(platform: str, raw: dict[str, Any]) -> PlatformSo
 def load_source_config(config_path: Path | None = None) -> list[PlatformSourceConfig]:
     """Load source config YAML and return normalized platform entries."""
 
-    path = config_path or (Path(__file__).resolve().parent / "source_config.yaml")
+    path = config_path or get_default_source_config_path()
     if not path.exists():
         return []
 
@@ -140,3 +144,11 @@ def get_enabled_platform_configs(config_path: Path | None = None) -> list[Platfo
     """Return only enabled platform configs."""
 
     return [config for config in load_source_config(config_path=config_path) if config.enabled]
+
+
+def get_default_source_config_path() -> Path:
+    """Return runtime source config path when present, else bundled defaults."""
+
+    if RUNTIME_SOURCE_CONFIG_PATH.exists():
+        return RUNTIME_SOURCE_CONFIG_PATH
+    return BASE_SOURCE_CONFIG_PATH
