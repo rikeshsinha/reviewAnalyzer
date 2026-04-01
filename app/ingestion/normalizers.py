@@ -64,7 +64,14 @@ def normalize_submission(raw_submission: Any) -> dict[str, Any]:
         "created_at": _iso_from_epoch(getattr(raw_submission, "created_utc", None)),
         "url": getattr(raw_submission, "url", None),
         "ingestion_ts": _now_iso(),
-        "dedupe_key": make_dedupe_key(SOURCE, external_id, f"{title}\n{content}"),
+        "dedupe_key": make_dedupe_key(
+            SOURCE,
+            external_id,
+            app_id=None,
+            author=_author_name(raw_submission),
+            created_at=_iso_from_epoch(getattr(raw_submission, "created_utc", None)),
+            text=f"{title}\n{content}",
+        ),
         "raw_payload": _raw_payload(raw_submission),
     }
 
@@ -102,6 +109,13 @@ def normalize_comment(raw_comment: Any, parent_submission: Any = None) -> dict[s
         "created_at": _iso_from_epoch(getattr(raw_comment, "created_utc", None)),
         "url": comment_url,
         "ingestion_ts": _now_iso(),
-        "dedupe_key": make_dedupe_key(SOURCE, external_id, f"{parent_external_id}\n{content}"),
+        "dedupe_key": make_dedupe_key(
+            SOURCE,
+            external_id,
+            app_id=None,
+            author=_author_name(raw_comment),
+            created_at=_iso_from_epoch(getattr(raw_comment, "created_utc", None)),
+            text=f"{parent_external_id}\n{content}",
+        ),
         "raw_payload": _raw_payload(raw_comment),
     }

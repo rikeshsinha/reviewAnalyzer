@@ -123,7 +123,14 @@ class GooglePlayIngestor(BaseIngestionAdapter):
                 else f"https://play.google.com/store/apps/details?id={app_id}"
             ),
             "ingestion_ts": datetime.now(tz=timezone.utc).isoformat(),
-            "dedupe_key": make_dedupe_key(SOURCE, external_id, f"{app_id}\n{author}\n{content}"),
+            "dedupe_key": make_dedupe_key(
+                SOURCE,
+                external_id,
+                app_id=app_id,
+                author=author,
+                created_at=created_iso,
+                text=content,
+            ),
             "raw_payload": dict(review),
         }
 
