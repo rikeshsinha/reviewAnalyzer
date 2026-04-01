@@ -5,12 +5,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 import logging
 from pathlib import Path
+import re
 from typing import Any
 
 
 BASE_SOURCE_CONFIG_PATH = Path(__file__).resolve().parent / "source_config.yaml"
 RUNTIME_SOURCE_CONFIG_PATH = Path("data/runtime_source_config.yaml")
 logger = logging.getLogger(__name__)
+COUNTRY_CODE_PATTERN = re.compile(r"^[a-z]{2}$")
+GOOGLE_PLAY_PACKAGE_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)+$")
 
 
 @dataclass(frozen=True)
@@ -116,7 +119,37 @@ def _normalize_platform_config(platform: str, raw: dict[str, Any]) -> PlatformSo
             raise SourceConfigError("platform 'reddit' requires non-empty 'communities' when enabled")
         normalized["subreddits"] = communities
     elif platform == "google_play":
-        normalized["apps"] = _normalize_string_list(raw.get("apps", []), field_name="apps", platform=platform)
+        apps = _normalize_string_list(raw.get("apps", []), field_name="apps", platform=platform)
+        if enabled and not apps:
+            raise SourceConfigError("platform 'google_play' requires non-empty 'apps' when enabled")
+        invalid_apps = [app for app in apps if not GOOGLE_PLAY_PACKAGE_PATTERN.fullmatch(app)]
+        if invalid_apps:
+            raise SourceConfigError(
+                "platform 'google_play' field 'apps' contains invalid package IDs: "
+                + ", ".join(sorted(invalid_apps))
+            )
+
+        countries_raw = _normalize_string_list(raw.get("countries", []), field_name="countries", platform=platform)
+        countries = [country.lower() for country in countries_raw]
+        invalid_countries = [country for country in countries if not COUNTRY_CODE_PATTERN.fullmatch(country)]
+        if invalid_countries:
+            raise SourceConfigError(
+                "platform 'google_play' field 'countries' must contain ISO-3166-1 alpha-2 codes: "
+                + ", ".join(sorted(invalid_countries))
+            )
+
+        languages = _normalize_string_list(raw.get("languages", []), field_name="languages", platform=platform)
+
+        max_reviews_per_app = raw.get("max_reviews_per_app", 1000)
+        if not isinstance(max_reviews_per_app, int) or max_reviews_per_app <= 0:
+            raise SourceConfigError(
+                "platform 'google_play' field 'max_reviews_per_app' must be a positive integer"
+            )
+
+        normalized["apps"] = apps
+        normalized["countries"] = countries
+        normalized["languages"] = languages
+        normalized["max_reviews_per_app"] = max_reviews_per_app
     else:
         for key, value in raw.items():
             if key in {"enabled", "days_back", "keywords"}:

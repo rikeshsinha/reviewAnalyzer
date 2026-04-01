@@ -21,6 +21,9 @@ platforms:
   google_play:
     enabled: false
     apps: ["com.example.app"]
+    countries: ["US", "gb"]
+    languages: ["en"]
+    max_reviews_per_app: 250
     keywords: []
 """.strip(),
         encoding="utf-8",
@@ -34,6 +37,11 @@ platforms:
     assert reddit.days_back == 14
     assert reddit.config["subreddits"] == ["GalaxyWatch", "Android"]
     assert reddit.config["keywords"] == ["sleep"]
+    google_play = next(config for config in configs if config.platform == "google_play")
+    assert google_play.config["apps"] == ["com.example.app"]
+    assert google_play.config["countries"] == ["us", "gb"]
+    assert google_play.config["languages"] == ["en"]
+    assert google_play.config["max_reviews_per_app"] == 250
 
 
 def test_get_enabled_platform_configs_filters_disabled(tmp_path: Path) -> None:
@@ -72,6 +80,55 @@ platforms:
     )
 
     with pytest.raises(SourceConfigError):
+        load_source_config(config_path)
+
+
+def test_load_source_config_rejects_enabled_google_play_without_apps(tmp_path: Path) -> None:
+    config_path = tmp_path / "source_config.yaml"
+    config_path.write_text(
+        """
+platforms:
+  google_play:
+    enabled: true
+    apps: []
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SourceConfigError, match="requires non-empty 'apps'"):
+        load_source_config(config_path)
+
+
+def test_load_source_config_rejects_invalid_google_play_country_code(tmp_path: Path) -> None:
+    config_path = tmp_path / "source_config.yaml"
+    config_path.write_text(
+        """
+platforms:
+  google_play:
+    enabled: true
+    apps: ["com.example.app"]
+    countries: ["usa", "1n"]
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SourceConfigError, match="countries"):
+        load_source_config(config_path)
+
+
+def test_load_source_config_rejects_invalid_google_play_package_id(tmp_path: Path) -> None:
+    config_path = tmp_path / "source_config.yaml"
+    config_path.write_text(
+        """
+platforms:
+  google_play:
+    enabled: true
+    apps: ["bad package"]
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SourceConfigError, match="invalid package IDs"):
         load_source_config(config_path)
 
 

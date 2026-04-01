@@ -5,6 +5,9 @@ platforms:
     keywords: ["Samsung Health", "Galaxy Watch", "Galaxy Ring", "sleep", "workout"]
     days_back: 30
   google_play:
-    enabled: false
-    apps: []
+    enabled: true
+    apps: ["com.sec.android.app.shealth"]
+    countries: ["us", "gb", "in"]
+    languages: ["en"]
+    max_reviews_per_app: 1000
     keywords: []
