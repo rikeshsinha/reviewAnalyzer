@@ -122,6 +122,7 @@ def test_insert_documents_skips_duplicate_google_play_fallback_dedupe() -> None:
             "platform": "google_play",
             "community_or_channel": "com.test.app",
             "platform_metadata": {"app_id": "com.test.app"},
+            "rating": 2,
             "ingestion_ts": "2026-03-10T00:00:01+00:00",
             "dedupe_key": dedupe_key,
             "raw_payload": {"x": 1},
@@ -138,6 +139,7 @@ def test_insert_documents_skips_duplicate_google_play_fallback_dedupe() -> None:
             "platform": "google_play",
             "community_or_channel": "com.test.app",
             "platform_metadata": {"app_id": "com.test.app"},
+            "rating": 1,
             "ingestion_ts": "2026-03-10T00:00:02+00:00",
             "dedupe_key": dedupe_key,
             "raw_payload": {"x": 2},
@@ -146,9 +148,12 @@ def test_insert_documents_skips_duplicate_google_play_fallback_dedupe() -> None:
 
     inserted = _insert_documents(session, source_id, docs)
     count = session.execute(text("SELECT COUNT(*) FROM documents")).scalar_one()
+    raw_json = session.execute(text("SELECT raw_json FROM documents LIMIT 1")).scalar_one()
+    payload = json.loads(raw_json)
 
     assert inserted == 1
     assert count == 1
+    assert payload["rating"] == 2
 
 
 def test_same_text_across_platforms_not_deduped() -> None:
