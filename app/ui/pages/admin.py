@@ -39,6 +39,29 @@ def _load_last_ingestion_runs() -> list[dict[str, Any]]:
 
 
 @st.cache_data(ttl=30)
+def _load_ingestion_metrics_by_platform() -> list[dict[str, Any]]:
+    session = SessionLocal()
+    try:
+        rows = session.execute(
+            text(
+                """
+                SELECT source_name AS platform,
+                       SUM(records_fetched) AS fetched,
+                       SUM(records_inserted) AS inserted,
+                       SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS errors,
+                       MAX(completed_at) AS last_completed_at
+                FROM ingestion_runs
+                GROUP BY source_name
+                ORDER BY last_completed_at DESC, platform ASC
+                """
+            )
+        ).fetchall()
+        return [dict(row._mapping) for row in rows]
+    finally:
+        session.close()
+
+
+@st.cache_data(ttl=30)
 def _load_last_enrichment_runs() -> list[dict[str, Any]]:
     session = SessionLocal()
     try:
@@ -205,7 +228,14 @@ def render(filters: dict[str, Any]) -> None:
                 ok, message = _rebuild_insight_cache(filters)
             (st.success if ok else st.error)(message)
 
-    st.markdown("#### Ingestion run stats / errors")
+    st.markdown("#### Ingestion run metrics by platform")
+    ingestion_platform_metrics = _load_ingestion_metrics_by_platform()
+    if ingestion_platform_metrics:
+        st.dataframe(ingestion_platform_metrics, use_container_width=True)
+    else:
+        st.info("No ingestion runs yet. Run 'Refresh Reddit ingestion' to populate this table.")
+
+    st.markdown("#### Recent ingestion runs")
     ingestion_rows = _load_last_ingestion_runs()
     if ingestion_rows:
         st.dataframe(ingestion_rows, use_container_width=True)
