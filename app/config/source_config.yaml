@@ -1,5 +1,12 @@
 platforms:
   reddit:
+    # Subreddit + keyword targeting drives both reddit fetch paths:
+    # - PRAW (default, API-based)
+    # - Pushshift (when REDDIT_FETCH_BACKEND=pushshift)
+    #
+    # Environment overrides remain supported:
+    # - REDDIT_SUBREDDITS overrides communities/subreddits from YAML
+    # - REDDIT_KEYWORDS overrides keywords from YAML
     enabled: true
     communities: ["GalaxyWatch", "samsung", "wearables", "Android", "Smartwatch"]
     keywords: ["Samsung Health", "Galaxy Watch", "Galaxy Ring", "sleep", "workout"]
