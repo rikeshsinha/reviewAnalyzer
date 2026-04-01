@@ -81,3 +81,8 @@ def test_google_play_filters_old_reviews() -> None:
 def test_registry_maps_google_play_adapter() -> None:
     adapter_class = get_adapter_class("google_play")
     assert adapter_class is GooglePlayIngestor
+
+
+def test_registry_maps_google_play_dash_alias() -> None:
+    adapter_class = get_adapter_class("google-play")
+    assert adapter_class is GooglePlayIngestor

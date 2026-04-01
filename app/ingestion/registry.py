@@ -11,6 +11,7 @@ from app.ingestion.reddit_ingestor import RedditIngestor
 INGESTION_ADAPTERS: dict[str, Type[BaseIngestionAdapter]] = {
     "reddit": RedditIngestor,
     "google_play": GooglePlayIngestor,
+    "google-play": GooglePlayIngestor,
     "app_store": RedditIngestor,
     "youtube": RedditIngestor,
 }
