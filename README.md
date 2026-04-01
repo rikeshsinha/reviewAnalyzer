@@ -107,6 +107,13 @@ In the Streamlit **Admin** page:
 ### 6) Recommended refresh cadence
 - Manual refresh is recommended **1–2 times per week**.
 - Increase to daily during launches/incidents.
+- For Google Play specifically, prefer **daily/weekly batch ingestion** over aggressive near-real-time polling.
+
+### 7) Google Play connector caveats
+- The Google Play connector may rely on unofficial endpoints/libraries and can break without notice if upstream behavior changes.
+- Respect Google Play rate limits and avoid aggressive polling loops.
+- If the Google Play connector fails during a multi-source refresh, the refresh continues for other enabled sources by default (unless `INGESTION_FAIL_FAST=true`), so the app remains available while the failed source is skipped for that run.
+- Keep Reddit (or another stable source) enabled as a fallback ingestion source when possible.
 
 ## Demo checklist
 1. **Seed DB**
@@ -137,10 +144,28 @@ In the Streamlit **Admin** page:
 ### Rate limits / transient failures
 - Reddit or OpenAI `429`/timeouts: retry later; enrichment retries transient errors automatically.
 - Reduce enrichment pressure by lowering `ENRICHMENT_BATCH_SIZE` and/or `ENRICHMENT_MAX_DOCS_PER_RUN`.
+- Google Play throttling/timeouts: switch to daily/weekly batches, reduce per-run scope (`apps`, `countries`, and `max_reviews_per_app`), and avoid frequent refresh triggers.
 
 ### Empty or low ingestion volume
 - Check `REDDIT_SUBREDDITS` / `REDDIT_KEYWORDS` values.
 - Ensure target communities have recent activity in the last 30 days.
+
+### Google Play connector failures
+- Symptom: refresh logs show `google_play` run failures while other platforms continue.
+- Expected fallback behavior: the failed source is skipped for that run, successful sources still ingest, and the app stays available with existing data.
+- Quick disable (base config): edit `app/config/source_config.yaml` and set:
+  ```yaml
+  platforms:
+    google_play:
+      enabled: false
+  ```
+- Quick disable (runtime override via Admin flow): in `data/runtime_source_config.yaml`, set the same override:
+  ```yaml
+  platforms:
+    google_play:
+      enabled: false
+  ```
+  Then re-run refresh (`python -m app.jobs.refresh_sources`).
 
 ### Useful enrichment environment variables
 - `ENRICHMENT_MAX_DOCS_PER_RUN` (default `100`)
