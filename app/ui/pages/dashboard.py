@@ -153,7 +153,7 @@ def render(filters: dict[str, Any]) -> None:
 
     trend_df = pd.DataFrame(payload["trend"])
     if not trend_df.empty:
-        st.plotly_chart(px.line(trend_df, x="day", y="docs", title="Document volume trend"), use_container_width=True)
+        st.plotly_chart(px.line(trend_df, x="day", y="docs", title="Document volume trend"), width="stretch")
     else:
         st.info("No trend data for current filters.")
 
@@ -165,7 +165,7 @@ def render(filters: dict[str, Any]) -> None:
         if complaints_df.empty:
             st.info("No complaint tags matched these filters yet.")
         else:
-            st.dataframe(complaints_df, use_container_width=True)
+            st.dataframe(complaints_df, width="stretch")
 
     sentiment_df = pd.DataFrame(payload["sentiment"])
     with right:
@@ -173,7 +173,7 @@ def render(filters: dict[str, Any]) -> None:
         if not sentiment_df.empty:
             st.plotly_chart(
                 px.pie(sentiment_df, values="count", names="sentiment", title="Sentiment distribution"),
-                use_container_width=True,
+                width="stretch",
             )
         else:
             st.info("No sentiment data for current filters.")

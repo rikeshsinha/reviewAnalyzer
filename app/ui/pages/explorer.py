@@ -50,7 +50,7 @@ def render(filters: dict[str, Any]) -> None:
     df = pd.DataFrame(table_rows)
     if df.empty:
         st.info("No documents found for this query/filter combination.")
-    st.dataframe(df, use_container_width=True)
+    st.dataframe(df, width="stretch")
 
     csv_buffer = StringIO()
     df.to_csv(csv_buffer, index=False)
