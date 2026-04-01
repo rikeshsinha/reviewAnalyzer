@@ -130,6 +130,14 @@ class RetrievalService:
             where.append("AND json_extract(d.raw_json, '$.subreddit') = :subreddit")
             params["subreddit"] = subreddit
 
+        if google_play_app := filters.get("google_play_app"):
+            where.append("AND json_extract(d.raw_json, '$.community_or_channel') = :google_play_app")
+            params["google_play_app"] = google_play_app
+
+        if rating := filters.get("rating"):
+            where.append("AND CAST(json_extract(d.raw_json, '$.rating') AS INTEGER) = :rating")
+            params["rating"] = int(rating)
+
         if date_from := filters.get("date_from"):
             where.append("AND datetime(d.published_at) >= datetime(:date_from)")
             params["date_from"] = date_from

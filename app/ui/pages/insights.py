@@ -25,13 +25,25 @@ def _load_insight(kind: str, filters: dict[str, Any]) -> dict[str, Any]:
 
 
 def _filter_label(filters: dict[str, Any]) -> str:
-    source = filters.get("subreddit") or "all subreddits"
+    source = filters.get("subreddit") or "all communities"
     date_from = filters.get("date_from") or "start"
     date_to = filters.get("date_to") or "today"
     return f"Source: {source} • Time range: {date_from} → {date_to}"
 
 
+def _coverage_label(filters: dict[str, Any]) -> str:
+    source = (filters.get("source") or "").strip().lower()
+    if source == "reddit":
+        selected = "Reddit"
+    elif source == "google_play":
+        selected = "Google Play"
+    else:
+        selected = "Reddit / Google Play"
+    return f"Based on selected sources: {selected}"
+
+
 def _render_payload(payload: dict[str, Any], filters: dict[str, Any]) -> None:
+    st.caption(_coverage_label(filters))
     st.caption(_filter_label(filters))
     st.markdown(payload.get("summary", "No summary available."))
     with st.expander("Metrics", expanded=True):

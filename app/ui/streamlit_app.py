@@ -30,7 +30,10 @@ def _get_filter_options() -> dict[str, list[str]]:
     default_options = {
         "min_date": [""],
         "max_date": [""],
+        "source": [],
         "subreddit": [],
+        "google_play_app": [],
+        "rating": [],
         "product": [],
         "issue": [],
         "competitor": [],
@@ -76,10 +79,50 @@ def _get_filter_options() -> dict[str, list[str]]:
                 )
             ).fetchall()
 
+            source_rows = session.execute(
+                text(
+                    """
+                    SELECT DISTINCT COALESCE(name, platform) AS source_name
+                    FROM sources
+                    ORDER BY source_name
+                    """
+                )
+            ).fetchall()
+
+            google_play_app_rows = session.execute(
+                text(
+                    """
+                    SELECT DISTINCT json_extract(d.raw_json, '$.community_or_channel') AS app_id
+                    FROM documents d
+                    JOIN sources s ON s.id = d.source_id
+                    WHERE s.platform = 'google_play'
+                      AND json_extract(d.raw_json, '$.community_or_channel') IS NOT NULL
+                    ORDER BY app_id
+                    """
+                )
+            ).fetchall()
+
+            rating_rows = session.execute(
+                text(
+                    """
+                    SELECT DISTINCT CAST(json_extract(d.raw_json, '$.rating') AS INTEGER) AS rating
+                    FROM documents d
+                    JOIN sources s ON s.id = d.source_id
+                    WHERE s.platform = 'google_play'
+                      AND json_extract(d.raw_json, '$.rating') IS NOT NULL
+                      AND CAST(json_extract(d.raw_json, '$.rating') AS INTEGER) BETWEEN 1 AND 5
+                    ORDER BY rating
+                    """
+                )
+            ).fetchall()
+
             return {
                 "min_date": [str(date_bounds_row.min_date) if date_bounds_row and date_bounds_row.min_date else ""],
                 "max_date": [str(date_bounds_row.max_date) if date_bounds_row and date_bounds_row.max_date else ""],
+                "source": [str(row.source_name) for row in source_rows if row.source_name],
                 "subreddit": [str(row.subreddit) for row in subreddit_rows if row.subreddit],
+                "google_play_app": [str(row.app_id) for row in google_play_app_rows if row.app_id],
+                "rating": [str(row.rating) for row in rating_rows if row.rating],
                 "product": _distinct_tag_values("product"),
                 "issue": _distinct_tag_values("issue"),
                 "competitor": _distinct_tag_values("competitor"),
@@ -111,7 +154,24 @@ def _build_sidebar_filters() -> dict[str, Any]:
     else:
         date_from, date_to = min_date, max_date
 
+    source_label_to_value = {
+        "All": None,
+        "Reddit": "reddit",
+        "Google Play": "google_play",
+    }
+    available_source_values = set(options["source"])
+    source_labels = ["All"] + [
+        label for label, value in source_label_to_value.items() if value and value in available_source_values
+    ]
+    source_label = st.sidebar.selectbox("Source", options=source_labels)
+    source = source_label_to_value.get(source_label)
     subreddit = st.sidebar.selectbox("Subreddit", options=["All"] + options["subreddit"])
+    google_play_app = None
+    if source == "google_play":
+        google_play_app = st.sidebar.selectbox("Google Play app/package", options=["All"] + options["google_play_app"])
+    rating = "All"
+    if source != "reddit":
+        rating = st.sidebar.selectbox("Rating (1-5 stars)", options=["All"] + options["rating"])
     product = st.sidebar.selectbox("Product", options=["All"] + options["product"])
     issue = st.sidebar.selectbox("Issue", options=["All"] + options["issue"])
     competitor = st.sidebar.selectbox("Competitor", options=["All"] + options["competitor"])
@@ -119,7 +179,10 @@ def _build_sidebar_filters() -> dict[str, Any]:
     return {
         "date_from": date_from.isoformat() if date_from else None,
         "date_to": date_to.isoformat() if date_to else None,
+        "source": source,
         "subreddit": None if subreddit == "All" else subreddit,
+        "google_play_app": None if google_play_app in (None, "All") else google_play_app,
+        "rating": None if rating == "All" else int(rating),
         "product_tags": [] if product == "All" else [product],
         "issue_tags": [] if issue == "All" else [issue],
         "competitor_tags": [] if competitor == "All" else [competitor],

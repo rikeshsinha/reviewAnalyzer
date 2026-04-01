@@ -16,9 +16,18 @@ def _where_clause(filters: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     where_parts: list[str] = []
     params: dict[str, Any] = {}
 
+    if filters.get("source"):
+        where_parts.append("AND EXISTS (SELECT 1 FROM sources s WHERE s.id = d.source_id AND s.name = :source)")
+        params["source"] = filters["source"]
     if filters.get("subreddit"):
         where_parts.append("AND json_extract(d.raw_json, '$.subreddit') = :subreddit")
         params["subreddit"] = filters["subreddit"]
+    if filters.get("google_play_app"):
+        where_parts.append("AND json_extract(d.raw_json, '$.community_or_channel') = :google_play_app")
+        params["google_play_app"] = filters["google_play_app"]
+    if filters.get("rating"):
+        where_parts.append("AND CAST(json_extract(d.raw_json, '$.rating') AS INTEGER) = :rating")
+        params["rating"] = int(filters["rating"])
     if filters.get("date_from"):
         where_parts.append("AND DATE(COALESCE(d.published_at, d.created_at)) >= DATE(:date_from)")
         params["date_from"] = filters["date_from"]
