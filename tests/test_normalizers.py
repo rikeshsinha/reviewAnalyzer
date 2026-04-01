@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from app.ingestion.normalizers import normalize_comment, normalize_submission
+from app.utils.hashing import make_dedupe_key
 
 
 def test_normalize_submission_output_shape() -> None:
@@ -57,3 +58,40 @@ def test_normalize_comment_output_shape() -> None:
     assert normalized["content"] == "Same here"
     assert normalized["url"].startswith("https://reddit.com/")
     assert isinstance(normalized["raw_payload"], dict)
+
+
+def test_make_dedupe_key_uses_fallback_hash_for_missing_external_id() -> None:
+    key = make_dedupe_key(
+        "google_play",
+        None,
+        app_id="com.test.app",
+        author="Alice",
+        created_at="2026-03-01T00:00:00+00:00",
+        text=" Battery drains   FAST ",
+    )
+
+    equivalent_key = make_dedupe_key(
+        "google_play",
+        None,
+        app_id="com.test.app",
+        author="alice",
+        created_at="2026-03-01T00:00:00+00:00",
+        text="battery   drains fast",
+    )
+
+    assert key is not None
+    assert key.startswith("google_play:fallback:")
+    assert key == equivalent_key
+
+
+def test_make_dedupe_key_returns_none_when_external_id_exists() -> None:
+    key = make_dedupe_key(
+        "reddit",
+        "abc123",
+        app_id=None,
+        author="alice",
+        created_at="2026-03-01T00:00:00+00:00",
+        text="hello world",
+    )
+
+    assert key is None
