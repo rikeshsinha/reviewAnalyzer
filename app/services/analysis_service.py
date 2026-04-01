@@ -267,6 +267,14 @@ class AnalysisService:
             where_parts.append("AND json_extract(d.raw_json, '$.subreddit') = :subreddit")
             params["subreddit"] = subreddit
 
+        if google_play_app := filters.get("google_play_app"):
+            where_parts.append("AND json_extract(d.raw_json, '$.community_or_channel') = :google_play_app")
+            params["google_play_app"] = google_play_app
+
+        if rating := filters.get("rating"):
+            where_parts.append("AND CAST(json_extract(d.raw_json, '$.rating') AS INTEGER) = :rating")
+            params["rating"] = int(rating)
+
         if date_from := filters.get("date_from"):
             where_parts.append("AND datetime(COALESCE(d.published_at, d.created_at)) >= datetime(:date_from)")
             params["date_from"] = date_from
