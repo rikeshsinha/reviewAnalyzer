@@ -231,21 +231,21 @@ def render(filters: dict[str, Any]) -> None:
     st.markdown("#### Ingestion run metrics by platform")
     ingestion_platform_metrics = _load_ingestion_metrics_by_platform()
     if ingestion_platform_metrics:
-        st.dataframe(ingestion_platform_metrics, use_container_width=True)
+        st.dataframe(ingestion_platform_metrics, width="stretch")
     else:
         st.info("No ingestion runs yet. Run 'Refresh Reddit ingestion' to populate this table.")
 
     st.markdown("#### Recent ingestion runs")
     ingestion_rows = _load_last_ingestion_runs()
     if ingestion_rows:
-        st.dataframe(ingestion_rows, use_container_width=True)
+        st.dataframe(ingestion_rows, width="stretch")
     else:
         st.info("No ingestion runs yet. Run 'Refresh Reddit ingestion' to populate this table.")
 
     st.markdown("#### Enrichment run stats / errors")
     enrichment_rows = _load_last_enrichment_runs()
     if enrichment_rows:
-        st.dataframe(enrichment_rows, use_container_width=True)
+        st.dataframe(enrichment_rows, width="stretch")
     else:
         st.info("No enrichment runs yet. Run 'Run enrichment' after ingestion to populate this table.")
 
