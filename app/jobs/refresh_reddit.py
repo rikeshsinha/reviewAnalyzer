@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import text
 
 from app.db.repositories import IngestionRunRepository
 from app.db.session import SessionLocal
+from app.ingestion.normalizers import normalize_pushshift_submission
+from app.ingestion.pushshift_client import search_submissions
 from app.ingestion.registry import get_adapter_class
 from app.utils.logging_config import setup_logging
 
@@ -33,6 +37,10 @@ def _ensure_source(session: Any, platform: str) -> int:
     if row is None:
         raise RuntimeError(f"Unable to resolve source row for platform '{platform}'")
     return int(row.id)
+
+
+def _ensure_reddit_source(session: Any) -> int:
+    return _ensure_source(session, "reddit")
 
 
 def _ensure_dedupe_constraints(session: Any) -> None:
@@ -109,6 +117,43 @@ def _insert_documents(session: Any, source_id: int, docs: list[dict[str, Any]]) 
     return inserted
 
 
+def _run_pushshift_ingestion(config: dict[str, Any], *, days_back: int) -> tuple[list[dict[str, Any]], int]:
+    subreddits = [item for item in config.get("subreddits", []) if isinstance(item, str) and item.strip()]
+    keywords = [item for item in config.get("keywords", []) if isinstance(item, str) and item.strip()]
+    post_limit = int(config.get("post_limit", 200))
+
+    now_utc = datetime.now(tz=timezone.utc)
+    after = int((now_utc - timedelta(days=max(days_back, 0))).timestamp())
+    before = int(now_utc.timestamp())
+
+    base_url = os.getenv("REDDIT_PUSHSHIFT_BASE_URL") or None
+
+    seen_ids: set[str] = set()
+    docs: list[dict[str, Any]] = []
+    query_terms = keywords or [""]
+
+    for subreddit in subreddits:
+        for query in query_terms:
+            submissions = search_submissions(
+                subreddit=subreddit,
+                query=query,
+                after=after,
+                before=before,
+                size=post_limit,
+                base_url=base_url,
+            )
+            for raw_submission in submissions:
+                normalized = normalize_pushshift_submission(raw_submission)
+                external_id = normalized.get("external_id")
+                if isinstance(external_id, str) and external_id in seen_ids:
+                    continue
+                if isinstance(external_id, str):
+                    seen_ids.add(external_id)
+                docs.append(normalized)
+
+    return docs, len(docs)
+
+
 def run_for_platform(platform: str, config: dict[str, Any], *, days_back: int) -> dict[str, int]:
     """Run ingestion for a single platform and return run counters."""
 
@@ -118,28 +163,32 @@ def run_for_platform(platform: str, config: dict[str, Any], *, days_back: int) -
 
     try:
         _safe_ensure_dedupe_constraints(session)
-        source_id = _ensure_source(session, platform)
+        source_id = _ensure_reddit_source(session) if platform == "reddit" else _ensure_source(session, platform)
         session.commit()
 
         run_id = run_repo.start_run(source_name=platform)
-        adapter_class = get_adapter_class(platform)
-        ingestor = adapter_class()
-
-        docs, stats = ingestor.run(config=config, days_back=days_back)
+        fetch_backend = os.getenv("REDDIT_FETCH_BACKEND", "praw").strip().lower()
+        if platform == "reddit" and fetch_backend == "pushshift":
+            docs, fetched_count = _run_pushshift_ingestion(config, days_back=days_back)
+        else:
+            adapter_class = get_adapter_class(platform)
+            ingestor = adapter_class()
+            docs, stats = ingestor.run(config=config, days_back=days_back)
+            fetched_count = stats.docs_emitted
         inserted = _insert_documents(session, source_id, docs)
 
         run_repo.complete_run(
             run_id=run_id,
-            records_fetched=stats.docs_emitted,
+            records_fetched=fetched_count,
             records_inserted=inserted,
             status="completed",
         )
         logger.info(
             "%s refresh completed",
             platform,
-            extra={"records_fetched": stats.docs_emitted, "records_inserted": inserted},
+            extra={"records_fetched": fetched_count, "records_inserted": inserted},
         )
-        return {"records_fetched": stats.docs_emitted, "records_inserted": inserted}
+        return {"records_fetched": fetched_count, "records_inserted": inserted}
     except Exception as exc:
         if run_id is not None:
             run_repo.complete_run(

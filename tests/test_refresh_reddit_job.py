@@ -6,7 +6,11 @@ from pathlib import Path
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 
-from app.jobs.refresh_reddit import _insert_documents, _safe_ensure_dedupe_constraints
+from app.jobs.refresh_reddit import (
+    _insert_documents,
+    _run_pushshift_ingestion,
+    _safe_ensure_dedupe_constraints,
+)
 from app.utils.hashing import make_dedupe_key
 
 
@@ -240,3 +244,36 @@ def test_same_text_across_platforms_not_deduped() -> None:
     assert gp_inserted == 1
     assert reddit_inserted == 1
     assert count == 2
+
+
+def test_run_pushshift_ingestion_normalizes_and_dedupes(monkeypatch) -> None:
+    calls: list[dict[str, str]] = []
+
+    def _fake_search_submissions(**kwargs):
+        calls.append({"subreddit": kwargs["subreddit"], "query": kwargs["query"]})
+        return [
+            {
+                "id": "abc123",
+                "title": "Battery issue",
+                "selftext": "Battery drains quickly",
+                "subreddit": kwargs["subreddit"],
+                "author": "alice",
+                "created_utc": 1_710_000_000,
+                "permalink": "/r/android/comments/abc123/test/",
+            }
+        ]
+
+    monkeypatch.setattr("app.jobs.refresh_reddit.search_submissions", _fake_search_submissions)
+    monkeypatch.setenv("REDDIT_PUSHSHIFT_BASE_URL", "https://example.pushshift.invalid/reddit/search/submission/")
+
+    docs, fetched_count = _run_pushshift_ingestion(
+        {"subreddits": ["android"], "keywords": ["battery", "drain"], "post_limit": 10},
+        days_back=7,
+    )
+
+    assert fetched_count == 1
+    assert len(docs) == 1
+    assert docs[0]["source"] == "reddit"
+    assert docs[0]["entity_type"] == "post"
+    assert docs[0]["external_id"] == "abc123"
+    assert calls == [{"subreddit": "android", "query": "battery"}, {"subreddit": "android", "query": "drain"}]

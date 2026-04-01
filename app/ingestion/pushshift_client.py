@@ -21,6 +21,7 @@ class PushshiftError(RuntimeError):
 
 def _request_with_retries(
     session: requests.Session,
+    url: str,
     params: dict[str, Any],
     *,
     timeout: int = DEFAULT_TIMEOUT_SECONDS,
@@ -33,7 +34,7 @@ def _request_with_retries(
 
     for attempt in range(retries + 1):
         try:
-            response = session.get(PUSHSHIFT_SUBMISSION_SEARCH_URL, params=params, timeout=timeout)
+            response = session.get(url, params=params, timeout=timeout)
             if response.status_code == 200:
                 payload = response.json()
                 data = payload.get("data", [])
@@ -59,6 +60,7 @@ def search_submissions(
     after: int,
     before: int,
     size: int,
+    base_url: str | None = None,
     sort: str = "desc",
     sort_type: str = "created_utc",
 ) -> list[dict]:
@@ -71,6 +73,7 @@ def search_submissions(
         raise ValueError("Pagination cursor support requires sort_type='created_utc'")
     if sort not in {"asc", "desc"}:
         raise ValueError("sort must be either 'asc' or 'desc'")
+    request_url = base_url or PUSHSHIFT_SUBMISSION_SEARCH_URL
 
     page_size = max(1, min(size, 100))
     all_records: list[dict[str, Any]] = []
@@ -93,7 +96,7 @@ def search_submissions(
                 "sort_type": sort_type,
             }
 
-            page = _request_with_retries(session, params)
+            page = _request_with_retries(session, request_url, params)
             if not page:
                 break
 
