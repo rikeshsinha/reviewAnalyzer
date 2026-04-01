@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from app.ingestion.normalizers import normalize_comment, normalize_submission
+from app.ingestion.normalizers import (
+    normalize_comment,
+    normalize_pushshift_submission,
+    normalize_submission,
+)
 from app.utils.hashing import make_dedupe_key
 
 
@@ -58,6 +62,35 @@ def test_normalize_comment_output_shape() -> None:
     assert normalized["content"] == "Same here"
     assert normalized["url"].startswith("https://reddit.com/")
     assert isinstance(normalized["raw_payload"], dict)
+
+
+def test_normalize_pushshift_submission_output_shape() -> None:
+    raw = {
+        "id": "sub_2",
+        "title": "Need help with battery",
+        "selftext": "",
+        "subreddit": "android",
+        "author": "charlie",
+        "created_utc": 1700000200,
+        "permalink": "/r/android/comments/sub_2/need_help_with_battery/",
+    }
+
+    normalized = normalize_pushshift_submission(raw)
+
+    assert normalized["doc_type"] == "post"
+    assert normalized["external_id"] == "sub_2"
+    assert normalized["parent_external_id"] is None
+    assert normalized["entity_type"] == "post"
+    assert normalized["title"] == "Need help with battery"
+    assert normalized["content"] == "Need help with battery"
+    assert normalized["community_or_channel"] == "android"
+    assert normalized["platform_metadata"]["subreddit"] == "android"
+    assert normalized["platform_metadata"]["parent_external_id"] is None
+    assert (
+        normalized["url"]
+        == "https://reddit.com/r/android/comments/sub_2/need_help_with_battery/"
+    )
+    assert normalized["raw_payload"] is raw
 
 
 def test_make_dedupe_key_uses_fallback_hash_for_missing_external_id() -> None:

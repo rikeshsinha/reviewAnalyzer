@@ -76,6 +76,52 @@ def normalize_submission(raw_submission: Any) -> dict[str, Any]:
     }
 
 
+def normalize_pushshift_submission(raw_submission: dict[str, Any]) -> dict[str, Any]:
+    """Normalize a Pushshift submission payload to the unified document shape."""
+
+    external_id = raw_submission.get("id")
+    title = raw_submission.get("title")
+    content = raw_submission.get("selftext") or title or ""
+    subreddit = raw_submission.get("subreddit")
+    permalink = raw_submission.get("permalink")
+
+    url = raw_submission.get("full_link")
+    if not url and permalink:
+        url = f"https://reddit.com{permalink}"
+
+    created_at = _iso_from_epoch(raw_submission.get("created_utc"))
+    author = raw_submission.get("author")
+
+    return {
+        "source": SOURCE,
+        "platform": SOURCE,
+        "external_id": external_id,
+        "parent_external_id": None,
+        "doc_type": "post",
+        "entity_type": "post",
+        "community_or_channel": subreddit,
+        "platform_metadata": {
+            "subreddit": subreddit,
+            "parent_external_id": None,
+        },
+        "author": author,
+        "title": title,
+        "content": content,
+        "created_at": created_at,
+        "url": url,
+        "ingestion_ts": _now_iso(),
+        "dedupe_key": make_dedupe_key(
+            SOURCE,
+            external_id,
+            app_id=None,
+            author=author,
+            created_at=created_at,
+            text=f"{title}\n{content}",
+        ),
+        "raw_payload": raw_submission,
+    }
+
+
 def normalize_comment(raw_comment: Any, parent_submission: Any = None) -> dict[str, Any]:
     """Normalize a PRAW comment to the unified document shape."""
 
