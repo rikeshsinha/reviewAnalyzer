@@ -80,6 +80,28 @@ What it does:
 - ingests posts/comments into `documents`
 - stores run metadata in `ingestion_runs`
 
+### 2a) Reddit ingestion backends: PRAW vs Pushshift
+You can choose which Reddit fetch backend to use via environment variables.
+
+Example `.env` settings:
+```bash
+REDDIT_FETCH_BACKEND=pushshift
+PUSHSHIFT_BASE_URL=...
+```
+
+Run command (unchanged):
+```bash
+python -m app.jobs.refresh_reddit
+```
+
+Behavior note:
+- After refresh completes, ingested Reddit data appears in the same database tables and Streamlit UI views immediately (no separate migration/sync step required).
+
+Caveats:
+- Pushshift availability and historical completeness may vary over time.
+- Pushshift schema/endpoint behavior can change without notice.
+- Always comply with platform terms of service and rate-limit guidance.
+
 ### 3) Run enrichment
 ```bash
 python -m app.jobs.enrich_new_docs
