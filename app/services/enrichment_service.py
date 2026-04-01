@@ -6,7 +6,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from openai import APIConnectionError, APITimeoutError, InternalServerError, OpenAI, RateLimitError
@@ -27,7 +27,7 @@ class EnrichmentConfig:
     model_name: str = "gpt-4.1-mini"
     batch_size: int = 3
     max_docs_per_run: int = 100
-    min_text_chars: int = 20
+    min_text_chars: int = 15
     max_text_chars: int = 3500
     max_retries: int = 3
 
@@ -47,14 +47,16 @@ class EnrichmentService:
 
         processable: list[dict[str, Any]] = []
         skipped_short = 0
+        fallback_docs: list[dict[str, Any]] = []
         for doc in documents:
             prepared_text = self._prepare_text(doc)
             if len(prepared_text) < self.config.min_text_chars:
                 skipped_short += 1
+                fallback_docs.append({**doc, "prepared_text": prepared_text})
                 continue
             processable.append({**doc, "prepared_text": prepared_text[: self.config.max_text_chars]})
 
-        enriched_count = 0
+        enriched_count = self._insert_fallback_enrichments(fallback_docs)
         failed_batches = 0
         for batch in self._batched(processable, batch_size=self.config.batch_size):
             try:
@@ -75,7 +77,10 @@ class EnrichmentService:
             text(
                 """
                 SELECT d.id, d.title, d.body
+                     , s.platform
+                     , json_extract(d.raw_json, '$.rating') AS rating
                 FROM documents d
+                JOIN sources s ON s.id = d.source_id
                 LEFT JOIN enrichments e ON e.document_id = d.id
                 WHERE e.id IS NULL
                 ORDER BY d.id ASC
@@ -90,13 +95,20 @@ class EnrichmentService:
         if not batch:
             return 0
 
-        payload = [{"document_id": doc["id"], "text": doc["prepared_text"]} for doc in batch]
+        payload = [
+            {
+                "document_id": doc["id"],
+                "text": doc["prepared_text"],
+                **({"rating": self._coerce_rating(doc.get("rating"))} if doc.get("platform") == "google_play" else {}),
+            }
+            for doc in batch
+        ]
         response_json = self._invoke_llm_with_retry(payload)
         parsed_docs = self._parse_response(response_json)
         if not parsed_docs:
             return 0
 
-        now_iso = datetime.now(tz=UTC).isoformat()
+        now_iso = datetime.now(tz=timezone.utc).isoformat()
         parsed_by_id = {int(item["document_id"]): item for item in parsed_docs if "document_id" in item}
 
         inserted = 0
@@ -107,8 +119,10 @@ class EnrichmentService:
                 continue
 
             metadata = {
+                "rating": self._coerce_rating(source_doc.get("rating")),
                 "sentiment_label": self._coerce_sentiment(item.get("sentiment_label")),
                 "primary_issue_category": self._coerce_issue_category(item.get("primary_issue_category")),
+                "issue_category": self._coerce_issue_category(item.get("primary_issue_category")),
                 "feature_request_flag": bool(item.get("feature_request_flag", False)),
                 "competitor_mentions": self._coerce_competitor_mentions(item.get("competitor_mentions")),
                 "summary_snippet": str(item.get("summary_snippet", "")).strip()[:400],
@@ -224,3 +238,68 @@ class EnrichmentService:
             seen.add(dedupe_key)
             deduped.append(normalized)
         return deduped[:20]
+
+    def _coerce_rating(self, raw_value: Any) -> int | None:
+        if raw_value is None or raw_value == "":
+            return None
+        try:
+            rating = int(float(raw_value))
+        except (TypeError, ValueError):
+            return None
+        if rating < 1 or rating > 5:
+            return None
+        return rating
+
+    def _fallback_sentiment(self, text: str, rating: int | None) -> str:
+        normalized = text.lower()
+        if rating is not None:
+            if rating <= 2:
+                return "negative"
+            if rating >= 4:
+                return "positive"
+        if any(token in normalized for token in ("bad", "bug", "crash", "broken", "hate")):
+            return "negative"
+        if any(token in normalized for token in ("good", "great", "love", "nice")):
+            return "positive"
+        return "neutral"
+
+    def _insert_fallback_enrichments(self, docs: list[dict[str, Any]]) -> int:
+        if not docs:
+            return 0
+
+        now_iso = datetime.now(tz=timezone.utc).isoformat()
+        inserted = 0
+        for doc in docs:
+            rating = self._coerce_rating(doc.get("rating"))
+            prepared_text = str(doc.get("prepared_text") or "")
+            metadata = {
+                "rating": rating,
+                "sentiment_label": self._fallback_sentiment(prepared_text, rating),
+                "primary_issue_category": "other",
+                "issue_category": "other",
+                "feature_request_flag": False,
+                "competitor_mentions": [],
+                "summary_snippet": prepared_text[:300],
+                "model_name": "fallback_rules",
+                "prompt_version": SENTIMENT_PROMPT_VERSION,
+                "enriched_at": now_iso,
+            }
+            self.session.execute(
+                text(
+                    """
+                    INSERT INTO enrichments (document_id, model_name, summary, sentiment_score, metadata_json)
+                    VALUES (:document_id, :model_name, :summary, :sentiment_score, :metadata_json)
+                    """
+                ),
+                {
+                    "document_id": int(doc["id"]),
+                    "model_name": "fallback_rules",
+                    "summary": metadata["summary_snippet"],
+                    "sentiment_score": None,
+                    "metadata_json": json.dumps(metadata),
+                },
+            )
+            inserted += 1
+
+        self.session.commit()
+        return inserted

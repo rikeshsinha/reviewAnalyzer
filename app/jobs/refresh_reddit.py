@@ -74,6 +74,7 @@ def _insert_documents(session: Any, source_id: int, docs: list[dict[str, Any]]) 
             "raw_json": json.dumps(
                 {
                     "platform": doc.get("platform") or doc.get("source"),
+                    "rating": doc.get("rating"),
                     "entity_type": doc.get("entity_type") or doc.get("doc_type"),
                     "community_or_channel": doc.get("community_or_channel") or doc.get("subreddit"),
                     "platform_metadata": doc.get("platform_metadata")
