@@ -69,6 +69,8 @@ OPENAI_API_KEY=your_openai_key
 ```bash
 REDDIT_CLIENT_ID=your_reddit_client_id
 REDDIT_CLIENT_SECRET=your_reddit_client_secret
+REDDIT_USERNAME=your_reddit_username
+REDDIT_PASSWORD=your_reddit_password
 REDDIT_USER_AGENT=reviewAnalyzer/0.1 by u/your_reddit_username
 ```
 
@@ -220,6 +222,8 @@ streamlit run streamlit_app.py
   - `OPENAI_API_KEY`
   - `REDDIT_CLIENT_ID`
   - `REDDIT_CLIENT_SECRET`
+  - `REDDIT_USERNAME` (optional)
+  - `REDDIT_PASSWORD` (optional)
   - `REDDIT_USER_AGENT`
   - `REDDIT_FETCH_BACKEND` (set to `pushshift` if desired)
   - `PUSHSHIFT_BASE_URL` (if using Pushshift)
@@ -231,6 +235,8 @@ Example secrets TOML:
 OPENAI_API_KEY = "..."
 REDDIT_CLIENT_ID = "..."
 REDDIT_CLIENT_SECRET = "..."
+REDDIT_USERNAME = "..."
+REDDIT_PASSWORD = "..."
 REDDIT_USER_AGENT = "reviewAnalyzer/0.1 by u/your_reddit_username"
 REDDIT_FETCH_BACKEND = "pushshift"
 PUSHSHIFT_BASE_URL = "https://api.pushshift.io/reddit/search/submission/"
@@ -294,6 +300,8 @@ cat > .env <<'ENVVARS'
 OPENAI_API_KEY=your_openai_key
 REDDIT_CLIENT_ID=your_reddit_client_id
 REDDIT_CLIENT_SECRET=your_reddit_client_secret
+REDDIT_USERNAME=your_reddit_username
+REDDIT_PASSWORD=your_reddit_password
 REDDIT_USER_AGENT=reviewAnalyzer/0.1 by u/your_reddit_username
 REDDIT_FETCH_BACKEND=public_json
 PUSHSHIFT_BASE_URL=https://api.pushshift.io/reddit/search/submission/
