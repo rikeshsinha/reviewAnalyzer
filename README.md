@@ -148,7 +148,7 @@ Behavior notes:
 - If keywords are empty, ingestion still runs with subreddit-only queries.
 - Failover chains are deterministic:
   - `pushshift -> public_json`
-  - `public_json` runs directly (no additional fallback chain).
+  - `public_json -> rss`
 - Any other backend value (for example `praw`) uses the configured adapter path.
 - In `public_json` mode, each `(subreddit, keyword)` pair is handled independently; if one pair returns a 403/error, that pair is skipped and the batch continues with remaining pairs.
 - If all attempted backends fail or return zero docs, ingestion run status is marked `failed` with details in `ingestion_runs.error_message`.

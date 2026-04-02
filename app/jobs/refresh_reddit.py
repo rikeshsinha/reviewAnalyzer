@@ -292,6 +292,7 @@ def run_for_platform(platform: str, config: dict[str, Any], *, days_back: int) -
                 fallback_chain = [
                     ("pushshift", _run_pushshift_ingestion),
                     ("public_json", _run_public_json_ingestion),
+                    ("rss", _run_rss_ingestion),
                 ]
 
                 for backend_name, backend_runner in fallback_chain:
@@ -327,7 +328,25 @@ def run_for_platform(platform: str, config: dict[str, Any], *, days_back: int) -
                     details = "; ".join(failover_events) if failover_events else "No backend attempts were executed"
                     raise RuntimeError(f"Reddit ingestion failed: all backend attempts returned zero docs ({details})")
             elif fetch_backend == "public_json":
-                docs, fetched_count = _run_public_json_ingestion(config, days_back=days_back)
+                failover_events = []
+                try:
+                    docs, fetched_count = _run_public_json_ingestion(config, days_back=days_back)
+                except (PublicRedditError, requests.RequestException) as exc:
+                    failover_events.append(f"public_json failed: {exc}")
+                    logger.warning(
+                        "Reddit ingestion backend failed",
+                        extra={"backend": "public_json", "error": str(exc)},
+                    )
+                    docs, fetched_count = _run_rss_ingestion(config, days_back=days_back)
+                    if fetched_count > 0:
+                        logger.info(
+                            "Reddit ingestion succeeded after failover",
+                            extra={
+                                "start_backend": fetch_backend,
+                                "used_backend": "rss",
+                                "events": failover_events,
+                            },
+                        )
             else:
                 adapter_class = get_adapter_class(platform)
                 ingestor = adapter_class()
