@@ -7,6 +7,8 @@ from types import SimpleNamespace
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 
+from app.config import settings as settings_module
+from app.jobs import enrich_new_docs
 from app.services.enrichment_service import EnrichmentConfig, EnrichmentService
 
 
@@ -140,3 +142,46 @@ def test_google_play_prompt_payload_includes_rating() -> None:
     user_content = client.calls[0]["messages"][1]["content"]
     assert f'"document_id": {doc_id}' in user_content
     assert '"rating": 2' in user_content
+
+
+def test_enrich_job_run_starts_with_only_openai_env(monkeypatch) -> None:
+    settings_module.get_enrichment_settings.cache_clear()
+    monkeypatch.setenv("OPENAI_API_KEY", "dummy")
+    for env_name in (
+        "REDDIT_CLIENT_ID",
+        "REDDIT_CLIENT_SECRET",
+        "REDDIT_USER_AGENT",
+        "PUBLIC_REDDIT_BASE_URL",
+        "PUBLIC_REDDIT_USER_AGENT",
+        "PUBLIC_REDDIT_PAGE_SIZE",
+    ):
+        monkeypatch.delenv(env_name, raising=False)
+
+    class _FakeSession:
+        def close(self) -> None:
+            return None
+
+    class _FakeRunRepo:
+        def __init__(self, _session) -> None:
+            self.completed_status: str | None = None
+
+        def start_run(self) -> int:
+            return 1
+
+        def complete_run(self, **kwargs) -> None:
+            self.completed_status = kwargs.get("status")
+
+    class _FakeService:
+        def __init__(self, **kwargs) -> None:
+            assert kwargs["config"].batch_size >= 1
+
+        def enrich_new_documents(self) -> dict[str, int]:
+            return {"candidates": 0, "enriched": 0, "skipped_short": 0, "failed_batches": 0}
+
+    monkeypatch.setattr(enrich_new_docs, "setup_logging", lambda: None)
+    monkeypatch.setattr(enrich_new_docs, "SessionLocal", lambda: _FakeSession())
+    monkeypatch.setattr(enrich_new_docs, "EnrichmentRunRepository", _FakeRunRepo)
+    monkeypatch.setattr(enrich_new_docs, "OpenAI", lambda api_key: SimpleNamespace(api_key=api_key))
+    monkeypatch.setattr(enrich_new_docs, "EnrichmentService", _FakeService)
+
+    enrich_new_docs.run()
