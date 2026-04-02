@@ -18,7 +18,6 @@ from app.ingestion.normalizers import normalize_pushshift_submission
 from app.ingestion.public_reddit_client import PublicRedditError
 from app.ingestion.pushshift_client import PushshiftError, search_submissions
 from app.ingestion.public_reddit_client import search_submissions as search_public_json_submissions
-from app.ingestion.reddit_rss_client import RedditRssError
 from app.ingestion.reddit_rss_client import search_submissions as search_rss_submissions
 from app.ingestion.registry import get_adapter_class
 from app.utils.logging_config import setup_logging
@@ -284,51 +283,56 @@ def run_for_platform(platform: str, config: dict[str, Any], *, days_back: int) -
 
         run_id = run_repo.start_run(source_name=platform)
         fetch_backend = settings.reddit_fetch_backend.strip().lower()
-        if platform == "reddit" and fetch_backend in {"pushshift", "public_json", "rss"}:
-            fallback_chain: list[tuple[str, Any]]
+        if platform == "reddit":
+            docs = []
+            fetched_count = 0
+
             if fetch_backend == "pushshift":
+                failover_events: list[str] = []
                 fallback_chain = [
                     ("pushshift", _run_pushshift_ingestion),
                     ("public_json", _run_public_json_ingestion),
-                    ("rss", _run_rss_ingestion),
                 ]
-            elif fetch_backend == "public_json":
-                fallback_chain = [
-                    ("public_json", _run_public_json_ingestion),
-                    ("rss", _run_rss_ingestion),
-                ]
-            else:
-                fallback_chain = [("rss", _run_rss_ingestion)]
-
-            docs = []
-            fetched_count = 0
-            failover_events: list[str] = []
 
                 for backend_name, backend_runner in fallback_chain:
                     try:
                         candidate_docs, candidate_count = backend_runner(config, days_back=days_back)
-                except (PushshiftError, PublicRedditError, RedditRssError, requests.RequestException) as exc:
-                    message = f"{backend_name} failed: {exc}"
-                    failover_events.append(message)
-                    logger.warning("Reddit ingestion backend failed", extra={"backend": backend_name, "error": str(exc)})
-                    continue
-
-                if candidate_count > 0:
-                    docs = candidate_docs
-                    fetched_count = candidate_count
-                    if failover_events:
-                        logger.info(
-                            "Reddit ingestion succeeded after failover",
-                            extra={"start_backend": fetch_backend, "used_backend": backend_name, "events": failover_events},
+                    except (PushshiftError, PublicRedditError, requests.RequestException) as exc:
+                        message = f"{backend_name} failed: {exc}"
+                        failover_events.append(message)
+                        logger.warning(
+                            "Reddit ingestion backend failed",
+                            extra={"backend": backend_name, "error": str(exc)},
                         )
-                    break
+                        continue
 
-                failover_events.append(f"{backend_name} returned 0 docs")
-                logger.info("Reddit ingestion backend returned 0 docs", extra={"backend": backend_name})
+                    if candidate_count > 0:
+                        docs = candidate_docs
+                        fetched_count = candidate_count
+                        if failover_events:
+                            logger.info(
+                                "Reddit ingestion succeeded after failover",
+                                extra={
+                                    "start_backend": fetch_backend,
+                                    "used_backend": backend_name,
+                                    "events": failover_events,
+                                },
+                            )
+                        break
 
-            if fetched_count == 0:
-                details = "; ".join(failover_events) if failover_events else "No backend attempts were executed"
-                raise RuntimeError(f"Reddit ingestion failed: all backend attempts returned zero docs ({details})")
+                    failover_events.append(f"{backend_name} returned 0 docs")
+                    logger.info("Reddit ingestion backend returned 0 docs", extra={"backend": backend_name})
+
+                if fetched_count == 0:
+                    details = "; ".join(failover_events) if failover_events else "No backend attempts were executed"
+                    raise RuntimeError(f"Reddit ingestion failed: all backend attempts returned zero docs ({details})")
+            elif fetch_backend == "public_json":
+                docs, fetched_count = _run_public_json_ingestion(config, days_back=days_back)
+            else:
+                adapter_class = get_adapter_class(platform)
+                ingestor = adapter_class()
+                docs, stats = ingestor.run(config=config, days_back=days_back)
+                fetched_count = stats.docs_emitted
         else:
             adapter_class = get_adapter_class(platform)
             ingestor = adapter_class()
