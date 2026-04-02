@@ -8,13 +8,17 @@ import os
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+import requests
 from sqlalchemy import text
 
 from app.db.repositories import IngestionRunRepository
 from app.db.session import SessionLocal
 from app.ingestion.normalizers import normalize_pushshift_submission
+from app.ingestion.public_reddit_client import PublicRedditError
 from app.ingestion.pushshift_client import PushshiftError, search_submissions
 from app.ingestion.public_reddit_client import search_submissions as search_public_json_submissions
+from app.ingestion.reddit_rss_client import RedditRssError
+from app.ingestion.reddit_rss_client import search_submissions as search_rss_submissions
 from app.ingestion.registry import get_adapter_class
 from app.utils.logging_config import setup_logging
 
@@ -198,6 +202,47 @@ def _run_public_json_ingestion(config: dict[str, Any], *, days_back: int) -> tup
     return docs, len(docs)
 
 
+def _run_rss_ingestion(config: dict[str, Any], *, days_back: int) -> tuple[list[dict[str, Any]], int]:
+    subreddits = [item for item in config.get("subreddits", []) if isinstance(item, str) and item.strip()]
+    keywords = [item for item in config.get("keywords", []) if isinstance(item, str) and item.strip()]
+
+    now_utc = datetime.now(tz=timezone.utc)
+    after_iso = (now_utc - timedelta(days=max(days_back, 0))).isoformat()
+    before_iso = now_utc.isoformat()
+
+    max_pages = int(os.getenv("REDDIT_RSS_MAX_PAGES", "3"))
+    delay_seconds = float(os.getenv("REDDIT_RSS_DELAY_SECONDS", "1.0"))
+    base_url = os.getenv("PUBLIC_REDDIT_BASE_URL", "https://www.reddit.com")
+    user_agent = os.getenv("PUBLIC_REDDIT_USER_AGENT") or os.getenv("REDDIT_USER_AGENT") or "reviewAnalyzer/0.1 (reddit-rss-ingestion)"
+
+    seen_ids: set[str] = set()
+    docs: list[dict[str, Any]] = []
+    query_terms = keywords or [""]
+
+    for subreddit in subreddits:
+        for query in query_terms:
+            submissions = search_rss_submissions(
+                subreddit=subreddit,
+                query=query,
+                after_iso=after_iso,
+                before_iso=before_iso,
+                max_pages=max_pages,
+                base_url=base_url,
+                user_agent=user_agent,
+                request_delay_seconds=delay_seconds,
+            )
+            for raw_submission in submissions:
+                normalized = normalize_pushshift_submission(raw_submission)
+                external_id = normalized.get("external_id")
+                if isinstance(external_id, str) and external_id in seen_ids:
+                    continue
+                if isinstance(external_id, str):
+                    seen_ids.add(external_id)
+                docs.append(normalized)
+
+    return docs, len(docs)
+
+
 def run_for_platform(platform: str, config: dict[str, Any], *, days_back: int) -> dict[str, int]:
     """Run ingestion for a single platform and return run counters."""
 
@@ -212,14 +257,51 @@ def run_for_platform(platform: str, config: dict[str, Any], *, days_back: int) -
 
         run_id = run_repo.start_run(source_name=platform)
         fetch_backend = os.getenv("REDDIT_FETCH_BACKEND", "praw").strip().lower()
-        if platform == "reddit" and fetch_backend == "pushshift":
-            try:
-                docs, fetched_count = _run_pushshift_ingestion(config, days_back=days_back)
-            except PushshiftError as exc:
-                logger.warning("Pushshift ingestion failed, falling back to public Reddit JSON", extra={"error": str(exc)})
-                docs, fetched_count = _run_public_json_ingestion(config, days_back=days_back)
-        elif platform == "reddit" and fetch_backend == "public_json":
-            docs, fetched_count = _run_public_json_ingestion(config, days_back=days_back)
+        if platform == "reddit" and fetch_backend in {"pushshift", "public_json", "rss"}:
+            fallback_chain: list[tuple[str, Any]]
+            if fetch_backend == "pushshift":
+                fallback_chain = [
+                    ("pushshift", _run_pushshift_ingestion),
+                    ("public_json", _run_public_json_ingestion),
+                    ("rss", _run_rss_ingestion),
+                ]
+            elif fetch_backend == "public_json":
+                fallback_chain = [
+                    ("public_json", _run_public_json_ingestion),
+                    ("rss", _run_rss_ingestion),
+                ]
+            else:
+                fallback_chain = [("rss", _run_rss_ingestion)]
+
+            docs = []
+            fetched_count = 0
+            failover_events: list[str] = []
+
+            for backend_name, backend_runner in fallback_chain:
+                try:
+                    candidate_docs, candidate_count = backend_runner(config, days_back=days_back)
+                except (PushshiftError, PublicRedditError, RedditRssError, requests.RequestException) as exc:
+                    message = f"{backend_name} failed: {exc}"
+                    failover_events.append(message)
+                    logger.warning("Reddit ingestion backend failed", extra={"backend": backend_name, "error": str(exc)})
+                    continue
+
+                if candidate_count > 0:
+                    docs = candidate_docs
+                    fetched_count = candidate_count
+                    if failover_events:
+                        logger.info(
+                            "Reddit ingestion succeeded after failover",
+                            extra={"start_backend": fetch_backend, "used_backend": backend_name, "events": failover_events},
+                        )
+                    break
+
+                failover_events.append(f"{backend_name} returned 0 docs")
+                logger.info("Reddit ingestion backend returned 0 docs", extra={"backend": backend_name})
+
+            if fetched_count == 0:
+                details = "; ".join(failover_events) if failover_events else "No backend attempts were executed"
+                raise RuntimeError(f"Reddit ingestion failed: all backend attempts returned zero docs ({details})")
         else:
             adapter_class = get_adapter_class(platform)
             ingestor = adapter_class()
