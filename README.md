@@ -70,13 +70,25 @@ REDDIT_CLIENT_SECRET=your_reddit_client_secret
 REDDIT_USER_AGENT=reviewAnalyzer/0.1 by u/your_reddit_username
 ```
 
-### Pushshift vars
+### Pushshift vars (optional)
 
 ```bash
-REDDIT_FETCH_BACKEND=pushshift
+REDDIT_FETCH_BACKEND=public_json
 PUSHSHIFT_BASE_URL=https://api.pushshift.io/reddit/search/submission/
 PUSHSHIFT_PAGE_SIZE=100
 PUSHSHIFT_MAX_PAGES=20
+```
+
+
+### Public Reddit JSON vars (no Reddit app keys required)
+
+```bash
+REDDIT_FETCH_BACKEND=public_json
+PUBLIC_REDDIT_BASE_URL=https://www.reddit.com
+PUBLIC_REDDIT_USER_AGENT=reviewAnalyzer/0.1 (public-json-ingestion)
+PUBLIC_REDDIT_PAGE_SIZE=100
+PUBLIC_REDDIT_MAX_PAGES=5
+PUBLIC_REDDIT_DELAY_SECONDS=1.0
 ```
 
 ### Optional list overrides
@@ -106,13 +118,13 @@ This creates required tables such as `sources`, `documents`, ingestion/enrichmen
 
 ## 6) Ingestion (Pushshift)
 
-Run Reddit ingestion job:
+Run Reddit ingestion job (works for `public_json`, `pushshift`, and `praw` backends):
 
 ```bash
 python -m app.jobs.refresh_reddit
 ```
 
-What it does in Pushshift mode (`REDDIT_FETCH_BACKEND=pushshift`):
+What it does in non-PRAW modes (`public_json` / `pushshift`):
 
 - Reads configured subreddit list + keyword list from source config.
 - Builds a UTC date window from `days_back` (e.g., last 30 days).
@@ -124,6 +136,7 @@ What it does in Pushshift mode (`REDDIT_FETCH_BACKEND=pushshift`):
 Behavior notes:
 
 - If keywords are empty, ingestion still runs with subreddit-only queries.
+- If Pushshift returns 4xx/5xx, the job automatically falls back to `public_json`.
 - Results are inserted with `INSERT OR IGNORE`, so reruns do not duplicate existing docs.
 
 ---
@@ -261,7 +274,7 @@ OPENAI_API_KEY=your_openai_key
 REDDIT_CLIENT_ID=your_reddit_client_id
 REDDIT_CLIENT_SECRET=your_reddit_client_secret
 REDDIT_USER_AGENT=reviewAnalyzer/0.1 by u/your_reddit_username
-REDDIT_FETCH_BACKEND=pushshift
+REDDIT_FETCH_BACKEND=public_json
 PUSHSHIFT_BASE_URL=https://api.pushshift.io/reddit/search/submission/
 PUSHSHIFT_PAGE_SIZE=100
 PUSHSHIFT_MAX_PAGES=20
