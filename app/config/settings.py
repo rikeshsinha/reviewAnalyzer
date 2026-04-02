@@ -21,6 +21,8 @@ class IngestionSettings(BaseModel):
 
     reddit_client_id: str | None = Field(None, alias="REDDIT_CLIENT_ID")
     reddit_client_secret: str | None = Field(None, alias="REDDIT_CLIENT_SECRET")
+    reddit_username: str | None = Field(None, alias="REDDIT_USERNAME")
+    reddit_password: str | None = Field(None, alias="REDDIT_PASSWORD")
     reddit_user_agent: str = Field("reviewAnalyzer/0.1", alias="REDDIT_USER_AGENT", min_length=1)
     reddit_fetch_backend: str = Field("praw", alias="REDDIT_FETCH_BACKEND", min_length=1)
     reddit_pushshift_base_url: str | None = Field(None, alias="REDDIT_PUSHSHIFT_BASE_URL")
@@ -57,6 +59,8 @@ def _build_env_values() -> dict[str, Any]:
         "OPENAI_API_KEY": os.getenv("OPENAI_API_KEY"),
         "REDDIT_CLIENT_ID": os.getenv("REDDIT_CLIENT_ID"),
         "REDDIT_CLIENT_SECRET": os.getenv("REDDIT_CLIENT_SECRET"),
+        "REDDIT_USERNAME": os.getenv("REDDIT_USERNAME"),
+        "REDDIT_PASSWORD": os.getenv("REDDIT_PASSWORD"),
         "REDDIT_USER_AGENT": os.getenv("REDDIT_USER_AGENT"),
         "REDDIT_FETCH_BACKEND": os.getenv("REDDIT_FETCH_BACKEND"),
         "REDDIT_PUSHSHIFT_BASE_URL": os.getenv("REDDIT_PUSHSHIFT_BASE_URL"),

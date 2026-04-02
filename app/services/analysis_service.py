@@ -120,7 +120,6 @@ class AnalysisService:
                 FROM documents d
                 JOIN enrichments e ON e.document_id = d.id
                 WHERE 1=1 {where_sql}
-                  AND COALESCE(json_extract(e.metadata_json, '$.primary_issue_category'), 'other') != 'other'
                 """
             ),
             params,
@@ -152,7 +151,6 @@ class AnalysisService:
                 FROM documents d
                 JOIN enrichments e ON e.document_id = d.id
                 WHERE 1=1 {where_sql}
-                  AND COALESCE(json_extract(e.metadata_json, '$.primary_issue_category'), 'other') != 'other'
                 GROUP BY DATE(COALESCE(d.published_at, d.created_at))
                 ORDER BY day DESC
                 LIMIT 14
@@ -170,7 +168,7 @@ class AnalysisService:
         evidence = self._build_evidence(
             where_sql=where_sql,
             params=params,
-            extra_condition="AND COALESCE(json_extract(e.metadata_json, '$.primary_issue_category'), 'other') != 'other'",
+            extra_condition="",
             limit=self.config.max_evidence_items,
         )
 

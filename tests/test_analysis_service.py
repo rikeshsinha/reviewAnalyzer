@@ -88,3 +88,47 @@ def test_refresh_cache_forces_cache_miss_and_new_row() -> None:
     assert before == 1
     assert after == 2
     assert refreshed["evidence"][0]["evidence_url"]
+
+
+def test_complaints_insight_includes_other_category() -> None:
+    session = _build_session()
+    source_id = int(
+        session.execute(
+            text(
+                """
+                INSERT INTO sources (platform, external_id, name, metadata_json)
+                VALUES ('reddit', 'reddit', 'reddit', '{}')
+                """
+            )
+        ).lastrowid
+    )
+
+    for idx, category in enumerate(["other", "sync"]):
+        doc_id = int(
+            session.execute(
+                text(
+                    """
+                    INSERT INTO documents (source_id, external_id, title, body, author, url, published_at, raw_json)
+                    VALUES (:source_id, :external_id, 'Issue', 'Issue body', 'u', 'https://example.com', '2026-03-02T00:00:00', '{}')
+                    """
+                ),
+                {"source_id": source_id, "external_id": f"doc-{idx}"},
+            ).lastrowid
+        )
+        session.execute(
+            text(
+                """
+                INSERT INTO enrichments (document_id, model_name, summary, metadata_json)
+                VALUES (:document_id, 'mock', 'summary', :metadata_json)
+                """
+            ),
+            {"document_id": doc_id, "metadata_json": json.dumps({"primary_issue_category": category})},
+        )
+    session.commit()
+
+    service = AnalysisService(session=session, client=None, config=AnalysisConfig(cache_ttl_minutes=60))
+    payload = service.generate_complaints_insight({})
+
+    assert payload["metrics"]["complaint_docs"] == 2
+    categories = {row["category"] for row in payload["metrics"]["top_issue_categories"]}
+    assert "other" in categories
