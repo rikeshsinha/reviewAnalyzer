@@ -7,8 +7,11 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 
 from app.ingestion.pushshift_client import PushshiftError
+from app.ingestion.public_reddit_client import PublicRedditError
+from app.ingestion.reddit_rss_client import RedditRssError
 from app.jobs.refresh_reddit import (
     _insert_documents,
+    _run_rss_ingestion,
     _run_pushshift_ingestion,
     _safe_ensure_dedupe_constraints,
     run_for_platform,
@@ -441,3 +444,167 @@ def test_run_for_platform_falls_back_to_public_json_when_pushshift_fails(monkeyp
             "days_back": 7,
         }
     ]
+
+
+def test_run_rss_ingestion_returns_normalized_docs(monkeypatch) -> None:
+    def _fake_search_rss_submissions(**kwargs):
+        assert kwargs["subreddit"] == "android"
+        return [
+            {
+                "id": "rss1",
+                "title": "RSS title",
+                "selftext": "RSS content",
+                "subreddit": "android",
+                "author": "dora",
+                "created_utc": 1_710_000_000,
+                "permalink": "/r/android/comments/rss1/test/",
+            }
+        ]
+
+    monkeypatch.setattr("app.jobs.refresh_reddit.search_rss_submissions", _fake_search_rss_submissions)
+
+    docs, fetched_count = _run_rss_ingestion(
+        {"subreddits": ["android"], "keywords": ["battery"], "post_limit": 10},
+        days_back=7,
+    )
+
+    assert fetched_count == 1
+    assert len(docs) == 1
+    assert docs[0]["external_id"] == "rss1"
+    assert docs[0]["entity_type"] == "post"
+    assert docs[0]["source"] == "reddit"
+
+
+def test_run_for_platform_falls_back_to_rss_when_public_json_fails(monkeypatch) -> None:
+    session = _build_session()
+    fallback_docs = [
+        {
+            "external_id": "rssfb1",
+            "title": "RSS fallback",
+            "content": "Recovered via RSS",
+            "author": "erin",
+            "url": "https://reddit.com/r/android/comments/rssfb1/test/",
+            "created_at": "2026-03-10T00:00:00+00:00",
+            "parent_external_id": None,
+            "doc_type": "post",
+            "entity_type": "post",
+            "platform": "reddit",
+            "community_or_channel": "android",
+            "subreddit": "android",
+            "platform_metadata": {"subreddit": "android", "parent_external_id": None},
+            "ingestion_ts": "2026-03-10T00:00:01+00:00",
+            "dedupe_key": "reddit:rssfb1",
+            "raw_payload": {"id": "rssfb1", "source": "rss"},
+        }
+    ]
+
+    def _fake_public_json(config: dict[str, object], *, days_back: int):
+        raise PublicRedditError("public json blocked")
+
+    rss_calls: list[dict[str, object]] = []
+
+    def _fake_rss(config: dict[str, object], *, days_back: int):
+        rss_calls.append({"config": config, "days_back": days_back})
+        return fallback_docs, len(fallback_docs)
+
+    monkeypatch.setattr("app.jobs.refresh_reddit.SessionLocal", lambda: session)
+    monkeypatch.setattr("app.jobs.refresh_reddit._run_public_json_ingestion", _fake_public_json)
+    monkeypatch.setattr("app.jobs.refresh_reddit._run_rss_ingestion", _fake_rss)
+    monkeypatch.setenv("REDDIT_FETCH_BACKEND", "public_json")
+
+    stats = run_for_platform(
+        "reddit",
+        {"subreddits": ["android"], "keywords": ["workout"], "post_limit": 10},
+        days_back=7,
+    )
+
+    assert stats == {"records_fetched": 1, "records_inserted": 1}
+    assert rss_calls == [
+        {
+            "config": {"subreddits": ["android"], "keywords": ["workout"], "post_limit": 10},
+            "days_back": 7,
+        }
+    ]
+
+
+def test_run_for_platform_uses_full_no_key_failover_chain(monkeypatch) -> None:
+    session = _build_session()
+    rss_docs = [
+        {
+            "external_id": "rsschain1",
+            "title": "Chain fallback",
+            "content": "Recovered after two failures",
+            "author": "frank",
+            "url": "https://reddit.com/r/android/comments/rsschain1/test/",
+            "created_at": "2026-03-10T00:00:00+00:00",
+            "parent_external_id": None,
+            "doc_type": "post",
+            "entity_type": "post",
+            "platform": "reddit",
+            "community_or_channel": "android",
+            "subreddit": "android",
+            "platform_metadata": {"subreddit": "android", "parent_external_id": None},
+            "ingestion_ts": "2026-03-10T00:00:01+00:00",
+            "dedupe_key": "reddit:rsschain1",
+            "raw_payload": {"id": "rsschain1", "source": "rss"},
+        }
+    ]
+
+    def _fake_pushshift(config: dict[str, object], *, days_back: int):
+        raise PushshiftError("pushshift host 403")
+
+    def _fake_public_json(config: dict[str, object], *, days_back: int):
+        raise PublicRedditError("public json host 403")
+
+    def _fake_rss(config: dict[str, object], *, days_back: int):
+        return rss_docs, len(rss_docs)
+
+    monkeypatch.setattr("app.jobs.refresh_reddit.SessionLocal", lambda: session)
+    monkeypatch.setattr("app.jobs.refresh_reddit._run_pushshift_ingestion", _fake_pushshift)
+    monkeypatch.setattr("app.jobs.refresh_reddit._run_public_json_ingestion", _fake_public_json)
+    monkeypatch.setattr("app.jobs.refresh_reddit._run_rss_ingestion", _fake_rss)
+    monkeypatch.setenv("REDDIT_FETCH_BACKEND", "pushshift")
+
+    stats = run_for_platform(
+        "reddit",
+        {"subreddits": ["android"], "keywords": ["workout"], "post_limit": 10},
+        days_back=7,
+    )
+
+    assert stats == {"records_fetched": 1, "records_inserted": 1}
+
+
+def test_run_for_platform_marks_failed_when_all_failovers_return_zero_docs(monkeypatch) -> None:
+    session = _build_session()
+
+    def _fake_pushshift(config: dict[str, object], *, days_back: int):
+        return [], 0
+
+    def _fake_public_json(config: dict[str, object], *, days_back: int):
+        return [], 0
+
+    def _fake_rss(config: dict[str, object], *, days_back: int):
+        return [], 0
+
+    monkeypatch.setattr("app.jobs.refresh_reddit.SessionLocal", lambda: session)
+    monkeypatch.setattr("app.jobs.refresh_reddit._run_pushshift_ingestion", _fake_pushshift)
+    monkeypatch.setattr("app.jobs.refresh_reddit._run_public_json_ingestion", _fake_public_json)
+    monkeypatch.setattr("app.jobs.refresh_reddit._run_rss_ingestion", _fake_rss)
+    monkeypatch.setenv("REDDIT_FETCH_BACKEND", "pushshift")
+
+    try:
+        run_for_platform(
+            "reddit",
+            {"subreddits": ["android"], "keywords": ["workout"], "post_limit": 10},
+            days_back=7,
+        )
+        assert False, "Expected run_for_platform to fail when all failovers return zero docs"
+    except RuntimeError as exc:
+        assert "all backend attempts returned zero docs" in str(exc)
+
+    run_row = session.execute(
+        text("SELECT status, error_message FROM ingestion_runs ORDER BY id DESC LIMIT 1")
+    ).first()
+    assert run_row is not None
+    assert run_row.status == "failed"
+    assert "returned zero docs" in run_row.error_message

@@ -21,7 +21,7 @@ The default source config is already geared toward Samsung Health and Galaxy Wat
 
 High-level flow:
 
-1. **Ingestion jobs** collect Reddit data (PRAW by default, or Pushshift when enabled).
+1. **Ingestion jobs** collect Reddit data (PRAW by default, or Pushshift/Public JSON/RSS in no-key environments).
 2. **Normalization/storage** writes canonical document rows and raw payload snapshots into SQLite.
 3. **Enrichment jobs** call OpenAI to generate structured analysis.
 4. **Streamlit UI** provides search, dashboards, Q&A, and admin controls over the same DB.
@@ -35,6 +35,8 @@ Core stack:
 - **Reddit backend options:**
   - **PRAW** (official Reddit OAuth)
   - **Pushshift** (set `REDDIT_FETCH_BACKEND=pushshift`)
+  - **Public JSON** (set `REDDIT_FETCH_BACKEND=public_json`)
+  - **RSS/Atom** (set `REDDIT_FETCH_BACKEND=rss`)
 
 ---
 
@@ -91,6 +93,14 @@ PUBLIC_REDDIT_MAX_PAGES=5
 PUBLIC_REDDIT_DELAY_SECONDS=1.0
 ```
 
+### Reddit RSS vars (no Reddit app keys required)
+
+```bash
+REDDIT_FETCH_BACKEND=rss
+REDDIT_RSS_MAX_PAGES=3
+REDDIT_RSS_DELAY_SECONDS=1.0
+```
+
 ### Optional list overrides
 
 If your environment/launcher supports source-list overrides, set:
@@ -116,19 +126,19 @@ This creates required tables such as `sources`, `documents`, ingestion/enrichmen
 
 ---
 
-## 6) Ingestion (Pushshift)
+## 6) Ingestion (Reddit backends + failover)
 
-Run Reddit ingestion job (works for `public_json`, `pushshift`, and `praw` backends):
+Run Reddit ingestion job (works for `public_json`, `pushshift`, `rss`, and `praw` backends):
 
 ```bash
 python -m app.jobs.refresh_reddit
 ```
 
-What it does in non-PRAW modes (`public_json` / `pushshift`):
+What it does in non-PRAW modes (`public_json` / `pushshift` / `rss`):
 
 - Reads configured subreddit list + keyword list from source config.
 - Builds a UTC date window from `days_back` (e.g., last 30 days).
-- Queries Pushshift by `(subreddit × keyword)` combinations.
+- Queries each backend by `(subreddit × keyword)` combinations.
 - Normalizes each record into internal document shape.
 - Deduplicates by external ID and DB dedupe keys.
 - Preserves raw source payload in `documents.raw_json` (`raw_payload`) for traceability/debugging.
@@ -136,7 +146,10 @@ What it does in non-PRAW modes (`public_json` / `pushshift`):
 Behavior notes:
 
 - If keywords are empty, ingestion still runs with subreddit-only queries.
-- If Pushshift returns 4xx/5xx, the job automatically falls back to `public_json`.
+- Failover chains are deterministic:
+  - `pushshift -> public_json -> rss`
+  - `public_json -> rss`
+- If all attempted backends fail or return zero docs, ingestion run status is marked `failed` with details in `ingestion_runs.error_message`.
 - Results are inserted with `INSERT OR IGNORE`, so reruns do not duplicate existing docs.
 
 ---
