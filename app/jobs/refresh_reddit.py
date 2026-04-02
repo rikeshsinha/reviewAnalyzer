@@ -11,6 +11,7 @@ from typing import Any
 import requests
 from sqlalchemy import text
 
+from app.config.settings import IngestionSettings, get_ingestion_settings
 from app.db.repositories import IngestionRunRepository
 from app.db.session import SessionLocal
 from app.ingestion.normalizers import normalize_pushshift_submission
@@ -122,7 +123,12 @@ def _insert_documents(session: Any, source_id: int, docs: list[dict[str, Any]]) 
     return inserted
 
 
-def _run_pushshift_ingestion(config: dict[str, Any], *, days_back: int) -> tuple[list[dict[str, Any]], int]:
+def _run_pushshift_ingestion(
+    config: dict[str, Any],
+    *,
+    days_back: int,
+    settings: IngestionSettings | None = None,
+) -> tuple[list[dict[str, Any]], int]:
     subreddits = [item for item in config.get("subreddits", []) if isinstance(item, str) and item.strip()]
     keywords = [item for item in config.get("keywords", []) if isinstance(item, str) and item.strip()]
     post_limit = int(config.get("post_limit", 200))
@@ -131,7 +137,8 @@ def _run_pushshift_ingestion(config: dict[str, Any], *, days_back: int) -> tuple
     after = int((now_utc - timedelta(days=max(days_back, 0))).timestamp())
     before = int(now_utc.timestamp())
 
-    base_url = os.getenv("REDDIT_PUSHSHIFT_BASE_URL") or None
+    active_settings = settings or get_ingestion_settings()
+    base_url = active_settings.reddit_pushshift_base_url or None
 
     seen_ids: set[str] = set()
     docs: list[dict[str, Any]] = []
@@ -159,7 +166,12 @@ def _run_pushshift_ingestion(config: dict[str, Any], *, days_back: int) -> tuple
     return docs, len(docs)
 
 
-def _run_public_json_ingestion(config: dict[str, Any], *, days_back: int) -> tuple[list[dict[str, Any]], int]:
+def _run_public_json_ingestion(
+    config: dict[str, Any],
+    *,
+    days_back: int,
+    settings: IngestionSettings | None = None,
+) -> tuple[list[dict[str, Any]], int]:
     subreddits = [item for item in config.get("subreddits", []) if isinstance(item, str) and item.strip()]
     keywords = [item for item in config.get("keywords", []) if isinstance(item, str) and item.strip()]
 
@@ -167,11 +179,12 @@ def _run_public_json_ingestion(config: dict[str, Any], *, days_back: int) -> tup
     after_iso = (now_utc - timedelta(days=max(days_back, 0))).isoformat()
     before_iso = now_utc.isoformat()
 
-    page_size = int(os.getenv("PUBLIC_REDDIT_PAGE_SIZE", "100"))
-    max_pages = int(os.getenv("PUBLIC_REDDIT_MAX_PAGES", "5"))
-    delay_seconds = float(os.getenv("PUBLIC_REDDIT_DELAY_SECONDS", "1.0"))
-    base_url = os.getenv("PUBLIC_REDDIT_BASE_URL", "https://www.reddit.com")
-    user_agent = os.getenv("PUBLIC_REDDIT_USER_AGENT") or os.getenv("REDDIT_USER_AGENT") or "reviewAnalyzer/0.1 (public-json-ingestion)"
+    active_settings = settings or get_ingestion_settings()
+    page_size = active_settings.public_reddit_page_size
+    max_pages = active_settings.public_reddit_max_pages
+    delay_seconds = active_settings.public_reddit_delay_seconds
+    base_url = active_settings.public_reddit_base_url
+    user_agent = active_settings.public_reddit_user_agent or active_settings.reddit_user_agent
 
     seen_ids: set[str] = set()
     docs: list[dict[str, Any]] = []
@@ -209,7 +222,12 @@ def _run_public_json_ingestion(config: dict[str, Any], *, days_back: int) -> tup
     return docs, len(docs)
 
 
-def _run_rss_ingestion(config: dict[str, Any], *, days_back: int) -> tuple[list[dict[str, Any]], int]:
+def _run_rss_ingestion(
+    config: dict[str, Any],
+    *,
+    days_back: int,
+    settings: IngestionSettings | None = None,
+) -> tuple[list[dict[str, Any]], int]:
     subreddits = [item for item in config.get("subreddits", []) if isinstance(item, str) and item.strip()]
     keywords = [item for item in config.get("keywords", []) if isinstance(item, str) and item.strip()]
 
@@ -219,8 +237,9 @@ def _run_rss_ingestion(config: dict[str, Any], *, days_back: int) -> tuple[list[
 
     max_pages = int(os.getenv("REDDIT_RSS_MAX_PAGES", "3"))
     delay_seconds = float(os.getenv("REDDIT_RSS_DELAY_SECONDS", "1.0"))
-    base_url = os.getenv("PUBLIC_REDDIT_BASE_URL", "https://www.reddit.com")
-    user_agent = os.getenv("PUBLIC_REDDIT_USER_AGENT") or os.getenv("REDDIT_USER_AGENT") or "reviewAnalyzer/0.1 (reddit-rss-ingestion)"
+    active_settings = settings or get_ingestion_settings()
+    base_url = active_settings.public_reddit_base_url
+    user_agent = active_settings.public_reddit_user_agent or active_settings.reddit_user_agent
 
     seen_ids: set[str] = set()
     docs: list[dict[str, Any]] = []
@@ -258,12 +277,13 @@ def run_for_platform(platform: str, config: dict[str, Any], *, days_back: int) -
     run_id: int | None = None
 
     try:
+        settings = get_ingestion_settings()
         _safe_ensure_dedupe_constraints(session)
         source_id = _ensure_reddit_source(session) if platform == "reddit" else _ensure_source(session, platform)
         session.commit()
 
         run_id = run_repo.start_run(source_name=platform)
-        fetch_backend = os.getenv("REDDIT_FETCH_BACKEND", "praw").strip().lower()
+        fetch_backend = settings.reddit_fetch_backend.strip().lower()
         if platform == "reddit" and fetch_backend in {"pushshift", "public_json", "rss"}:
             fallback_chain: list[tuple[str, Any]]
             if fetch_backend == "pushshift":
@@ -284,9 +304,9 @@ def run_for_platform(platform: str, config: dict[str, Any], *, days_back: int) -
             fetched_count = 0
             failover_events: list[str] = []
 
-            for backend_name, backend_runner in fallback_chain:
-                try:
-                    candidate_docs, candidate_count = backend_runner(config, days_back=days_back)
+                for backend_name, backend_runner in fallback_chain:
+                    try:
+                        candidate_docs, candidate_count = backend_runner(config, days_back=days_back)
                 except (PushshiftError, PublicRedditError, RedditRssError, requests.RequestException) as exc:
                     message = f"{backend_name} failed: {exc}"
                     failover_events.append(message)

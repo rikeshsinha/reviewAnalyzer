@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 
+from app.config.settings import get_ingestion_settings
 from app.config.source_loader import get_enabled_platform_configs
 from app.jobs.refresh_reddit import run_for_platform
 from app.utils.logging_config import setup_logging
@@ -23,6 +24,7 @@ def run() -> None:
     """Run ingestion for each enabled platform from source config."""
 
     setup_logging()
+    get_ingestion_settings()
     enabled_configs = get_enabled_platform_configs()
     if not enabled_configs:
         raise RuntimeError("No enabled platforms found in merged source configuration")

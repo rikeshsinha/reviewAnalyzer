@@ -7,7 +7,7 @@ import os
 
 from openai import OpenAI
 
-from app.config.settings import get_settings
+from app.config.settings import get_enrichment_settings
 from app.db.repositories import EnrichmentRunRepository
 from app.db.session import SessionLocal
 from app.services.enrichment_service import EnrichmentConfig, EnrichmentService
@@ -28,7 +28,7 @@ def _int_env(name: str, default: int, minimum: int = 1) -> int:
 
 def run() -> None:
     setup_logging()
-    settings = get_settings()
+    settings = get_enrichment_settings()
     config = EnrichmentConfig(
         model_name=os.getenv("ENRICHMENT_MODEL", "gpt-4.1-mini"),
         batch_size=_int_env("ENRICHMENT_BATCH_SIZE", 3),
