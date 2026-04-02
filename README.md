@@ -128,13 +128,13 @@ This creates required tables such as `sources`, `documents`, ingestion/enrichmen
 
 ## 6) Ingestion (Reddit backends + failover)
 
-Run Reddit ingestion job (works for `public_json`, `pushshift`, `rss`, and `praw` backends):
+Run Reddit ingestion job (works for `public_json`, `pushshift`, and adapter-backed modes like `praw`):
 
 ```bash
 python -m app.jobs.refresh_reddit
 ```
 
-What it does in non-PRAW modes (`public_json` / `pushshift` / `rss`):
+What it does in non-PRAW modes (`public_json` / `pushshift`):
 
 - Reads configured subreddit list + keyword list from source config.
 - Builds a UTC date window from `days_back` (e.g., last 30 days).
@@ -147,11 +147,18 @@ Behavior notes:
 
 - If keywords are empty, ingestion still runs with subreddit-only queries.
 - Failover chains are deterministic:
-  - `pushshift -> public_json -> rss`
-  - `public_json -> rss`
+  - `pushshift -> public_json`
+  - `public_json` runs directly (no additional fallback chain).
+- Any other backend value (for example `praw`) uses the configured adapter path.
 - In `public_json` mode, each `(subreddit, keyword)` pair is handled independently; if one pair returns a 403/error, that pair is skipped and the batch continues with remaining pairs.
 - If all attempted backends fail or return zero docs, ingestion run status is marked `failed` with details in `ingestion_runs.error_message`.
 - Results are inserted with `INSERT OR IGNORE`, so reruns do not duplicate existing docs.
+
+Quick syntax regression check for critical ingestion/retrieval modules:
+
+```bash
+python -m py_compile app/jobs/refresh_reddit.py app/ingestion/public_reddit_client.py app/services/retrieval_service.py
+```
 
 ---
 
