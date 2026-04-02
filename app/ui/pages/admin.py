@@ -204,6 +204,51 @@ def _write_runtime_source_config(communities: list[str], keywords: list[str]) ->
     RUNTIME_SOURCE_CONFIG_PATH.write_text("\n".join(output_lines) + "\n", encoding="utf-8")
 
 
+def _set_admin_config_notice(level: str, message: str) -> None:
+    st.session_state.admin_config_notice_level = level
+    st.session_state.admin_config_notice_message = message
+
+
+def _save_runtime_config_callback() -> None:
+    communities_text = st.session_state.get("admin_communities_input_text", st.session_state.get("admin_communities_text", ""))
+    keywords_text = st.session_state.get("admin_keywords_input_text", st.session_state.get("admin_keywords_text", ""))
+
+    communities = _normalize_text_list(communities_text)
+    keywords = _normalize_text_list(keywords_text)
+
+    if not communities:
+        _set_admin_config_notice("error", "At least one subreddit is required.")
+        return
+
+    try:
+        _write_runtime_source_config(communities, keywords)
+        st.session_state.admin_communities_text = "\n".join(communities)
+        st.session_state.admin_keywords_text = "\n".join(keywords)
+        _set_admin_config_notice(
+            "success",
+            f"Saved runtime config to `{RUNTIME_SOURCE_CONFIG_PATH}`.",
+        )
+    except Exception as exc:  # noqa: BLE001
+        _set_admin_config_notice("error", f"Failed to save config: {exc}")
+
+
+def _reset_to_defaults_callback() -> None:
+    default_communities, default_keywords = _read_reddit_config(BASE_SOURCE_CONFIG_PATH)
+    st.session_state.admin_communities_text = "\n".join(default_communities)
+    st.session_state.admin_keywords_text = "\n".join(default_keywords)
+
+    try:
+        _write_runtime_source_config(default_communities, default_keywords)
+        _set_admin_config_notice(
+            "success",
+            "Reset runtime config to defaults from base source_config.yaml.",
+        )
+    except Exception as exc:  # noqa: BLE001
+        _set_admin_config_notice("error", f"Failed to reset runtime config: {exc}")
+
+    st.rerun()
+
+
 def render(filters: dict[str, Any]) -> None:
     st.subheader("Admin")
 
@@ -263,7 +308,7 @@ def render(filters: dict[str, Any]) -> None:
     communities_col, keywords_col = st.columns(2)
     with communities_col:
         st.markdown("**Reddit communities**")
-        st.text_area(
+        communities_text = st.text_area(
             "Subreddit list editor",
             key="admin_communities_text",
             height=180,
@@ -271,36 +316,31 @@ def render(filters: dict[str, Any]) -> None:
         )
     with keywords_col:
         st.markdown("**Reddit keywords**")
-        st.text_area(
+        keywords_text = st.text_area(
             "Keyword list editor",
             key="admin_keywords_text",
             height=180,
             help="One keyword per line.",
         )
 
+    st.session_state.admin_communities_input_text = communities_text
+    st.session_state.admin_keywords_input_text = keywords_text
+
+    notice_message = st.session_state.get("admin_config_notice_message")
+    notice_level = st.session_state.get("admin_config_notice_level", "info")
+    if notice_message:
+        if notice_level == "success":
+            st.success(notice_message)
+        elif notice_level == "error":
+            st.error(notice_message)
+        else:
+            st.info(notice_message)
+
+    # Manual regression check: edit values, click Save, click Reset, and verify no
+    # `st.session_state` widget mutation errors are raised.
     action_col1, action_col2 = st.columns(2)
     with action_col1:
-        if st.button("Save config", type="primary"):
-            communities = _normalize_text_list(st.session_state.admin_communities_text)
-            keywords = _normalize_text_list(st.session_state.admin_keywords_text)
-            if not communities:
-                st.error("At least one subreddit is required.")
-            else:
-                try:
-                    _write_runtime_source_config(communities, keywords)
-                    st.session_state.admin_communities_text = "\n".join(communities)
-                    st.session_state.admin_keywords_text = "\n".join(keywords)
-                    st.success(f"Saved runtime config to `{RUNTIME_SOURCE_CONFIG_PATH}`.")
-                except Exception as exc:  # noqa: BLE001
-                    st.error(f"Failed to save config: {exc}")
+        st.button("Save config", type="primary", on_click=_save_runtime_config_callback)
 
     with action_col2:
-        if st.button("Reset to defaults"):
-            default_communities, default_keywords = _read_reddit_config(BASE_SOURCE_CONFIG_PATH)
-            st.session_state.admin_communities_text = "\n".join(default_communities)
-            st.session_state.admin_keywords_text = "\n".join(default_keywords)
-            try:
-                _write_runtime_source_config(default_communities, default_keywords)
-                st.success("Reset runtime config to defaults from base source_config.yaml.")
-            except Exception as exc:  # noqa: BLE001
-                st.error(f"Failed to reset runtime config: {exc}")
+        st.button("Reset to defaults", on_click=_reset_to_defaults_callback)
