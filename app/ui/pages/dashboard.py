@@ -171,8 +171,22 @@ def render(filters: dict[str, Any]) -> None:
     with right:
         st.markdown("#### Sentiment split")
         if not sentiment_df.empty:
+            sentiment_color_map = {
+                "positive": "#2E7D32",  # green
+                "negative": "#C62828",  # red
+                "neutral": "#1565C0",  # blue
+                "mixed": "#81C784",  # light green
+                "unknown": "#9E9E9E",  # gray fallback
+            }
             st.plotly_chart(
-                px.pie(sentiment_df, values="count", names="sentiment", title="Sentiment distribution"),
+                px.pie(
+                    sentiment_df,
+                    values="count",
+                    names="sentiment",
+                    title="Sentiment distribution",
+                    color="sentiment",
+                    color_discrete_map=sentiment_color_map,
+                ),
                 width="stretch",
             )
         else:
