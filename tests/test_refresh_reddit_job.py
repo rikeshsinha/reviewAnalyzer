@@ -6,6 +6,7 @@ from pathlib import Path
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 
+from app.ingestion.pushshift_client import PushshiftError
 from app.jobs.refresh_reddit import (
     _insert_documents,
     _run_pushshift_ingestion,
@@ -333,3 +334,110 @@ def test_run_for_platform_uses_pushshift_backend_and_persists_reddit_payload(mon
     ]
     assert payload["platform"] == "reddit"
     assert payload["raw_payload"] == {"id": "abc123", "source": "pushshift"}
+
+
+def test_run_for_platform_uses_public_json_backend(monkeypatch) -> None:
+    session = _build_session()
+
+    docs = [
+        {
+            "external_id": "pjson1",
+            "title": "Sleep tracking",
+            "content": "Sleep tracking is inaccurate",
+            "author": "bob",
+            "url": "https://reddit.com/r/android/comments/pjson1/test/",
+            "created_at": "2026-03-10T00:00:00+00:00",
+            "parent_external_id": None,
+            "doc_type": "post",
+            "entity_type": "post",
+            "platform": "reddit",
+            "community_or_channel": "android",
+            "subreddit": "android",
+            "platform_metadata": {"subreddit": "android", "parent_external_id": None},
+            "ingestion_ts": "2026-03-10T00:00:01+00:00",
+            "dedupe_key": "reddit:pjson1",
+            "raw_payload": {"id": "pjson1", "source": "public_json"},
+        }
+    ]
+
+    public_json_calls: list[dict[str, object]] = []
+
+    def _fake_run_public_json_ingestion(config: dict[str, object], *, days_back: int):
+        public_json_calls.append({"config": config, "days_back": days_back})
+        return docs, len(docs)
+
+    monkeypatch.setattr("app.jobs.refresh_reddit.SessionLocal", lambda: session)
+    monkeypatch.setattr("app.jobs.refresh_reddit._run_public_json_ingestion", _fake_run_public_json_ingestion)
+    monkeypatch.setenv("REDDIT_FETCH_BACKEND", "public_json")
+
+    stats = run_for_platform(
+        "reddit",
+        {"subreddits": ["android"], "keywords": ["sleep"], "post_limit": 10},
+        days_back=7,
+    )
+
+    row = session.execute(text("SELECT raw_json FROM documents WHERE external_id='pjson1' LIMIT 1")).first()
+    assert row is not None
+    payload = json.loads(row.raw_json)
+
+    assert stats == {"records_fetched": 1, "records_inserted": 1}
+    assert public_json_calls == [
+        {
+            "config": {"subreddits": ["android"], "keywords": ["sleep"], "post_limit": 10},
+            "days_back": 7,
+        }
+    ]
+    assert payload["raw_payload"] == {"id": "pjson1", "source": "public_json"}
+
+
+def test_run_for_platform_falls_back_to_public_json_when_pushshift_fails(monkeypatch) -> None:
+    session = _build_session()
+
+    fallback_docs = [
+        {
+            "external_id": "fallback1",
+            "title": "Workout",
+            "content": "Workout sync issue",
+            "author": "carol",
+            "url": "https://reddit.com/r/android/comments/fallback1/test/",
+            "created_at": "2026-03-10T00:00:00+00:00",
+            "parent_external_id": None,
+            "doc_type": "post",
+            "entity_type": "post",
+            "platform": "reddit",
+            "community_or_channel": "android",
+            "subreddit": "android",
+            "platform_metadata": {"subreddit": "android", "parent_external_id": None},
+            "ingestion_ts": "2026-03-10T00:00:01+00:00",
+            "dedupe_key": "reddit:fallback1",
+            "raw_payload": {"id": "fallback1", "source": "public_json"},
+        }
+    ]
+
+    def _fake_run_pushshift_ingestion(config: dict[str, object], *, days_back: int):
+        raise PushshiftError("Pushshift request failed")
+
+    fallback_calls: list[dict[str, object]] = []
+
+    def _fake_run_public_json_ingestion(config: dict[str, object], *, days_back: int):
+        fallback_calls.append({"config": config, "days_back": days_back})
+        return fallback_docs, len(fallback_docs)
+
+    monkeypatch.setattr("app.jobs.refresh_reddit.SessionLocal", lambda: session)
+    monkeypatch.setattr("app.jobs.refresh_reddit._run_pushshift_ingestion", _fake_run_pushshift_ingestion)
+    monkeypatch.setattr("app.jobs.refresh_reddit._run_public_json_ingestion", _fake_run_public_json_ingestion)
+    monkeypatch.setenv("REDDIT_FETCH_BACKEND", "pushshift")
+
+    stats = run_for_platform(
+        "reddit",
+        {"subreddits": ["android"], "keywords": ["workout"], "post_limit": 10},
+        days_back=7,
+    )
+
+    assert stats == {"records_fetched": 1, "records_inserted": 1}
+    assert fallback_calls == [
+        {
+            "config": {"subreddits": ["android"], "keywords": ["workout"], "post_limit": 10},
+            "days_back": 7,
+        }
+    ]
