@@ -11,6 +11,7 @@ from app.ingestion.public_reddit_client import PublicRedditError
 from app.ingestion.reddit_rss_client import RedditRssError
 from app.jobs.refresh_reddit import (
     _insert_documents,
+    _run_public_json_ingestion,
     _run_rss_ingestion,
     _run_pushshift_ingestion,
     _safe_ensure_dedupe_constraints,
@@ -282,6 +283,41 @@ def test_run_pushshift_ingestion_normalizes_and_dedupes(monkeypatch) -> None:
     assert docs[0]["entity_type"] == "post"
     assert docs[0]["external_id"] == "abc123"
     assert calls == [{"subreddit": "android", "query": "battery"}, {"subreddit": "android", "query": "drain"}]
+
+
+def test_run_public_json_ingestion_continues_after_failed_pair(monkeypatch) -> None:
+    calls: list[dict[str, str]] = []
+
+    def _fake_public_json_search(**kwargs):
+        calls.append({"subreddit": kwargs["subreddit"], "query": kwargs["query"]})
+        if kwargs["query"] == "battery":
+            raise PublicRedditError("403 blocked")
+        return [
+            {
+                "id": "ok1",
+                "title": "Sleep issue",
+                "selftext": "Sleep details",
+                "subreddit": kwargs["subreddit"],
+                "author": "alice",
+                "created_utc": 1_710_000_000,
+                "permalink": "/r/android/comments/ok1/test/",
+            }
+        ]
+
+    monkeypatch.setattr("app.jobs.refresh_reddit.search_public_json_submissions", _fake_public_json_search)
+    monkeypatch.setenv("PUBLIC_REDDIT_PAGE_SIZE", "100")
+    monkeypatch.setenv("PUBLIC_REDDIT_MAX_PAGES", "2")
+    monkeypatch.setenv("PUBLIC_REDDIT_DELAY_SECONDS", "0")
+
+    docs, fetched_count = _run_public_json_ingestion(
+        {"subreddits": ["android"], "keywords": ["battery", "sleep"], "post_limit": 10},
+        days_back=7,
+    )
+
+    assert calls == [{"subreddit": "android", "query": "battery"}, {"subreddit": "android", "query": "sleep"}]
+    assert fetched_count == 1
+    assert len(docs) == 1
+    assert docs[0]["external_id"] == "ok1"
 
 
 def test_run_for_platform_uses_pushshift_backend_and_persists_reddit_payload(monkeypatch) -> None:

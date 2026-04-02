@@ -179,17 +179,24 @@ def _run_public_json_ingestion(config: dict[str, Any], *, days_back: int) -> tup
 
     for subreddit in subreddits:
         for query in query_terms:
-            submissions = search_public_json_submissions(
-                subreddit=subreddit,
-                query=query,
-                after_iso=after_iso,
-                before_iso=before_iso,
-                page_size=page_size,
-                max_pages=max_pages,
-                base_url=base_url,
-                user_agent=user_agent,
-                request_delay_seconds=delay_seconds,
-            )
+            try:
+                submissions = search_public_json_submissions(
+                    subreddit=subreddit,
+                    query=query,
+                    after_iso=after_iso,
+                    before_iso=before_iso,
+                    page_size=page_size,
+                    max_pages=max_pages,
+                    base_url=base_url,
+                    user_agent=user_agent,
+                    request_delay_seconds=delay_seconds,
+                )
+            except (PublicRedditError, requests.RequestException) as exc:
+                logger.warning(
+                    "Skipping failed public_json pair and continuing batch",
+                    extra={"subreddit": subreddit, "query": query, "error": str(exc)},
+                )
+                continue
             for raw_submission in submissions:
                 normalized = normalize_pushshift_submission(raw_submission)
                 external_id = normalized.get("external_id")

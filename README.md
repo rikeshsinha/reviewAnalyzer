@@ -149,6 +149,7 @@ Behavior notes:
 - Failover chains are deterministic:
   - `pushshift -> public_json -> rss`
   - `public_json -> rss`
+- In `public_json` mode, each `(subreddit, keyword)` pair is handled independently; if one pair returns a 403/error, that pair is skipped and the batch continues with remaining pairs.
 - If all attempted backends fail or return zero docs, ingestion run status is marked `failed` with details in `ingestion_runs.error_message`.
 - Results are inserted with `INSERT OR IGNORE`, so reruns do not duplicate existing docs.
 
