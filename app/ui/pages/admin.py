@@ -210,8 +210,8 @@ def _set_admin_config_notice(level: str, message: str) -> None:
 
 
 def _save_runtime_config_callback() -> None:
-    communities_text = st.session_state.get("admin_communities_input_text", st.session_state.get("admin_communities_text", ""))
-    keywords_text = st.session_state.get("admin_keywords_input_text", st.session_state.get("admin_keywords_text", ""))
+    communities_text = st.session_state.get("admin_communities_input", st.session_state.get("admin_communities_draft", ""))
+    keywords_text = st.session_state.get("admin_keywords_input", st.session_state.get("admin_keywords_draft", ""))
 
     communities = _normalize_text_list(communities_text)
     keywords = _normalize_text_list(keywords_text)
@@ -222,20 +222,21 @@ def _save_runtime_config_callback() -> None:
 
     try:
         _write_runtime_source_config(communities, keywords)
-        st.session_state.admin_communities_text = "\n".join(communities)
-        st.session_state.admin_keywords_text = "\n".join(keywords)
+        st.session_state.admin_communities_draft = "\n".join(communities)
+        st.session_state.admin_keywords_draft = "\n".join(keywords)
         _set_admin_config_notice(
             "success",
             f"Saved runtime config to `{RUNTIME_SOURCE_CONFIG_PATH}`.",
         )
+        st.rerun()
     except Exception as exc:  # noqa: BLE001
         _set_admin_config_notice("error", f"Failed to save config: {exc}")
 
 
 def _reset_to_defaults_callback() -> None:
     default_communities, default_keywords = _read_reddit_config(BASE_SOURCE_CONFIG_PATH)
-    st.session_state.admin_communities_text = "\n".join(default_communities)
-    st.session_state.admin_keywords_text = "\n".join(default_keywords)
+    st.session_state.admin_communities_draft = "\n".join(default_communities)
+    st.session_state.admin_keywords_draft = "\n".join(default_keywords)
 
     try:
         _write_runtime_source_config(default_communities, default_keywords)
@@ -300,31 +301,10 @@ def render(filters: dict[str, Any]) -> None:
     initial_path = RUNTIME_SOURCE_CONFIG_PATH if RUNTIME_SOURCE_CONFIG_PATH.exists() else BASE_SOURCE_CONFIG_PATH
     initial_communities, initial_keywords = _read_reddit_config(initial_path)
 
-    if "admin_communities_text" not in st.session_state:
-        st.session_state.admin_communities_text = "\n".join(initial_communities)
-    if "admin_keywords_text" not in st.session_state:
-        st.session_state.admin_keywords_text = "\n".join(initial_keywords)
-
-    communities_col, keywords_col = st.columns(2)
-    with communities_col:
-        st.markdown("**Reddit communities**")
-        communities_text = st.text_area(
-            "Subreddit list editor",
-            key="admin_communities_text",
-            height=180,
-            help="One subreddit per line.",
-        )
-    with keywords_col:
-        st.markdown("**Reddit keywords**")
-        keywords_text = st.text_area(
-            "Keyword list editor",
-            key="admin_keywords_text",
-            height=180,
-            help="One keyword per line.",
-        )
-
-    st.session_state.admin_communities_input_text = communities_text
-    st.session_state.admin_keywords_input_text = keywords_text
+    if "admin_communities_draft" not in st.session_state:
+        st.session_state.admin_communities_draft = "\n".join(initial_communities)
+    if "admin_keywords_draft" not in st.session_state:
+        st.session_state.admin_keywords_draft = "\n".join(initial_keywords)
 
     notice_message = st.session_state.get("admin_config_notice_message")
     notice_level = st.session_state.get("admin_config_notice_level", "info")
@@ -338,9 +318,30 @@ def render(filters: dict[str, Any]) -> None:
 
     # Manual regression check: edit values, click Save, click Reset, and verify no
     # `st.session_state` widget mutation errors are raised.
-    action_col1, action_col2 = st.columns(2)
-    with action_col1:
-        st.button("Save config", type="primary", on_click=_save_runtime_config_callback)
+    with st.form("admin_source_config_form"):
+        communities_col, keywords_col = st.columns(2)
+        with communities_col:
+            st.markdown("**Reddit communities**")
+            st.text_area(
+                "Subreddit list editor",
+                key="admin_communities_input",
+                value=st.session_state.admin_communities_draft,
+                height=180,
+                help="One subreddit per line.",
+            )
+        with keywords_col:
+            st.markdown("**Reddit keywords**")
+            st.text_area(
+                "Keyword list editor",
+                key="admin_keywords_input",
+                value=st.session_state.admin_keywords_draft,
+                height=180,
+                help="One keyword per line.",
+            )
 
-    with action_col2:
-        st.button("Reset to defaults", on_click=_reset_to_defaults_callback)
+        action_col1, action_col2 = st.columns(2)
+        with action_col1:
+            st.form_submit_button("Save config", type="primary", on_click=_save_runtime_config_callback)
+
+        with action_col2:
+            st.form_submit_button("Reset to defaults", on_click=_reset_to_defaults_callback)
