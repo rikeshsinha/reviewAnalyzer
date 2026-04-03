@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import pandas as pd
+import plotly.express as px
 import streamlit as st
 
 from app.db.session import SessionLocal
@@ -42,12 +44,103 @@ def _coverage_label(filters: dict[str, Any]) -> str:
     return f"Based on selected sources: {selected}"
 
 
-def _render_payload(payload: dict[str, Any], filters: dict[str, Any]) -> None:
+def _render_sentiment_charts(metrics: dict[str, Any]) -> None:
+    sentiment_trend_df = pd.DataFrame(metrics.get("daily_sentiment_trend", []))
+    if sentiment_trend_df.empty:
+        st.info("No daily sentiment trend data for current filters.")
+        return
+
+    sentiment_trend_df = sentiment_trend_df.sort_values("day")
+    melted_df = sentiment_trend_df.melt(
+        id_vars=["day"],
+        value_vars=["positive", "negative", "neutral", "mixed"],
+        var_name="sentiment",
+        value_name="count",
+    )
+    sentiment_color_map = {
+        "positive": "#2E7D32",  # green
+        "negative": "#C62828",  # red
+        "neutral": "#1565C0",  # blue
+        "mixed": "#81C784",  # light green
+    }
+    st.plotly_chart(
+        px.bar(
+            melted_df,
+            x="day",
+            y="count",
+            color="sentiment",
+            barmode="stack",
+            title="Daily sentiment trend",
+            color_discrete_map=sentiment_color_map,
+        ),
+        width="stretch",
+    )
+
+
+def _render_complaints_charts(metrics: dict[str, Any]) -> None:
+    categories_df = pd.DataFrame(metrics.get("top_issue_categories", []))
+    if categories_df.empty:
+        st.info("No issue category data for current filters.")
+    else:
+        st.plotly_chart(
+            px.pie(
+                categories_df,
+                values="count",
+                names="category",
+                title="Top complaint issue categories",
+            ),
+            width="stretch",
+        )
+
+    complaint_trend_df = pd.DataFrame(metrics.get("daily_complaint_trend", []))
+    if complaint_trend_df.empty:
+        st.info("No daily complaint trend data for current filters.")
+    else:
+        complaint_trend_df = complaint_trend_df.sort_values("day")
+        st.plotly_chart(
+            px.line(
+                complaint_trend_df,
+                x="day",
+                y="complaint_count",
+                title="Daily complaint trend",
+            ),
+            width="stretch",
+        )
+
+
+def _render_feature_request_charts(metrics: dict[str, Any]) -> None:
+    feature_trend_df = pd.DataFrame(metrics.get("daily_feature_request_trend", []))
+    if feature_trend_df.empty:
+        st.info("No daily feature request trend data for current filters.")
+        return
+
+    feature_trend_df = feature_trend_df.sort_values("day")
+    st.plotly_chart(
+        px.line(
+            feature_trend_df,
+            x="day",
+            y="feature_request_count",
+            title="Daily feature request trend",
+        ),
+        width="stretch",
+    )
+
+
+def _render_payload(kind: str, payload: dict[str, Any], filters: dict[str, Any]) -> None:
+    metrics = payload.get("metrics", {})
     st.caption(_coverage_label(filters))
     st.caption(_filter_label(filters))
     st.markdown(payload.get("summary", "No summary available."))
+
+    if kind == "sentiment":
+        _render_sentiment_charts(metrics)
+    elif kind == "complaints":
+        _render_complaints_charts(metrics)
+    elif kind == "features":
+        _render_feature_request_charts(metrics)
+
     with st.expander("Metrics", expanded=True):
-        st.json(payload.get("metrics", {}))
+        st.json(metrics)
     with st.expander("Evidence citations", expanded=True):
         evidence_items = payload.get("evidence", [])
         if not evidence_items:
@@ -69,10 +162,10 @@ def render(filters: dict[str, Any]) -> None:
 
     with tab_sentiment:
         with st.spinner("Loading sentiment insight..."):
-            _render_payload(_load_insight("sentiment", filters), filters)
+            _render_payload("sentiment", _load_insight("sentiment", filters), filters)
     with tab_complaints:
         with st.spinner("Loading complaints insight..."):
-            _render_payload(_load_insight("complaints", filters), filters)
+            _render_payload("complaints", _load_insight("complaints", filters), filters)
     with tab_features:
         with st.spinner("Loading feature request insight..."):
-            _render_payload(_load_insight("features", filters), filters)
+            _render_payload("features", _load_insight("features", filters), filters)

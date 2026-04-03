@@ -32,27 +32,34 @@ def _seed_sentiment_doc(session: Session) -> None:
         ).lastrowid
     )
 
-    doc_id = int(
+    seeded_rows = [
+        ("x-1", "2026-03-02T00:00:00", "negative"),
+        ("x-2", "2026-03-02T01:00:00", "positive"),
+        ("x-3", "2026-03-03T00:00:00", "neutral"),
+        ("x-4", "2026-03-03T01:00:00", "mixed"),
+    ]
+    for external_id, published_at, sentiment in seeded_rows:
+        doc_id = int(
+            session.execute(
+                text(
+                    """
+                    INSERT INTO documents (source_id, external_id, title, body, author, url, published_at, raw_json)
+                    VALUES (:source_id, :external_id, 'Battery issue', 'battery drains quickly', 'u', 'https://example.com', :published_at, '{}')
+                    """
+                ),
+                {"source_id": source_id, "external_id": external_id, "published_at": published_at},
+            ).lastrowid
+        )
+
         session.execute(
             text(
                 """
-                INSERT INTO documents (source_id, external_id, title, body, author, url, published_at, raw_json)
-                VALUES (:source_id, 'x', 'Battery issue', 'battery drains quickly', 'u', 'https://example.com', '2026-03-02T00:00:00', '{}')
+                INSERT INTO enrichments (document_id, model_name, summary, metadata_json)
+                VALUES (:document_id, 'mock', 'summary', :metadata_json)
                 """
             ),
-            {"source_id": source_id},
-        ).lastrowid
-    )
-
-    session.execute(
-        text(
-            """
-            INSERT INTO enrichments (document_id, model_name, summary, metadata_json)
-            VALUES (:document_id, 'mock', 'summary', :metadata_json)
-            """
-        ),
-        {"document_id": doc_id, "metadata_json": json.dumps({"sentiment_label": "negative"})},
-    )
+            {"document_id": doc_id, "metadata_json": json.dumps({"sentiment_label": sentiment})},
+        )
     session.commit()
 
 
@@ -72,6 +79,10 @@ def test_insight_cache_miss_then_hit() -> None:
     assert cache_rows == 1
     assert cache_rows_after == 1
     assert first == second
+    assert "daily_sentiment_trend" in first["metrics"]
+    trend_rows = first["metrics"]["daily_sentiment_trend"]
+    assert trend_rows
+    assert {"day", "positive", "negative", "neutral", "mixed"}.issubset(trend_rows[0].keys())
 
 
 def test_refresh_cache_forces_cache_miss_and_new_row() -> None:
@@ -252,3 +263,24 @@ def test_dashboard_ranked_complaints_orders_by_severity_then_recency() -> None:
     ordered_titles = [row["title"] for row in complaints]
 
     assert ordered_titles[:4] == ["Negative new", "Negative old", "Mixed", "Neutral"]
+
+
+def test_insights_page_render_smoke() -> None:
+    from app.ui.pages import insights
+
+    payload = {
+        "summary": "Mock summary",
+        "metrics": {
+            "daily_sentiment_trend": [
+                {"day": "2026-03-02", "positive": 1, "negative": 1, "neutral": 0, "mixed": 0}
+            ],
+            "daily_complaint_trend": [{"day": "2026-03-02", "complaint_count": 2}],
+            "daily_feature_request_trend": [{"day": "2026-03-02", "feature_request_count": 1}],
+            "top_issue_categories": [{"category": "bug", "count": 2}],
+        },
+        "evidence": [],
+    }
+
+    insights._render_payload("sentiment", payload, {})
+    insights._render_payload("complaints", payload, {})
+    insights._render_payload("features", payload, {})

@@ -67,8 +67,10 @@ class AnalysisService:
                 f"""
                 SELECT
                     DATE(COALESCE(d.published_at, d.created_at)) AS day,
-                    COUNT(*) AS total,
-                    SUM(CASE WHEN json_extract(e.metadata_json, '$.sentiment_label') = 'negative' THEN 1 ELSE 0 END) AS negative
+                    SUM(CASE WHEN json_extract(e.metadata_json, '$.sentiment_label') = 'positive' THEN 1 ELSE 0 END) AS positive,
+                    SUM(CASE WHEN json_extract(e.metadata_json, '$.sentiment_label') = 'negative' THEN 1 ELSE 0 END) AS negative,
+                    SUM(CASE WHEN json_extract(e.metadata_json, '$.sentiment_label') = 'neutral' THEN 1 ELSE 0 END) AS neutral,
+                    SUM(CASE WHEN json_extract(e.metadata_json, '$.sentiment_label') = 'mixed' THEN 1 ELSE 0 END) AS mixed
                 FROM documents d
                 JOIN enrichments e ON e.document_id = d.id
                 WHERE 1=1 {where_sql}
@@ -88,7 +90,7 @@ class AnalysisService:
                 "negative": int(totals_row.negative_count or 0),
                 "mixed": int(totals_row.mixed_count or 0),
             },
-            "daily_negative_trend": [dict(row._mapping) for row in trend_rows],
+            "daily_sentiment_trend": [dict(row._mapping) for row in trend_rows],
         }
 
         evidence = self._build_evidence(
