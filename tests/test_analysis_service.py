@@ -82,7 +82,9 @@ def test_insight_cache_miss_then_hit() -> None:
     assert "daily_sentiment_trend" in first["metrics"]
     trend_rows = first["metrics"]["daily_sentiment_trend"]
     assert trend_rows
-    assert {"day", "positive", "negative", "neutral", "mixed"}.issubset(trend_rows[0].keys())
+    assert {"day", "positive_count", "negative_count", "neutral_count", "mixed_count"}.issubset(
+        trend_rows[0].keys()
+    )
 
 
 def test_refresh_cache_forces_cache_miss_and_new_row() -> None:
@@ -272,7 +274,13 @@ def test_insights_page_render_smoke() -> None:
         "summary": "Mock summary",
         "metrics": {
             "daily_sentiment_trend": [
-                {"day": "2026-03-02", "positive": 1, "negative": 1, "neutral": 0, "mixed": 0}
+                {
+                    "day": "2026-03-02",
+                    "positive_count": 1,
+                    "negative_count": 1,
+                    "neutral_count": 0,
+                    "mixed_count": 0,
+                }
             ],
             "daily_complaint_trend": [{"day": "2026-03-02", "complaint_count": 2}],
             "daily_feature_request_trend": [{"day": "2026-03-02", "feature_request_count": 1}],

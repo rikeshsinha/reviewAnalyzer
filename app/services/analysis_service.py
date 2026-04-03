@@ -67,10 +67,10 @@ class AnalysisService:
                 f"""
                 SELECT
                     DATE(COALESCE(d.published_at, d.created_at)) AS day,
-                    SUM(CASE WHEN json_extract(e.metadata_json, '$.sentiment_label') = 'positive' THEN 1 ELSE 0 END) AS positive,
-                    SUM(CASE WHEN json_extract(e.metadata_json, '$.sentiment_label') = 'negative' THEN 1 ELSE 0 END) AS negative,
-                    SUM(CASE WHEN json_extract(e.metadata_json, '$.sentiment_label') = 'neutral' THEN 1 ELSE 0 END) AS neutral,
-                    SUM(CASE WHEN json_extract(e.metadata_json, '$.sentiment_label') = 'mixed' THEN 1 ELSE 0 END) AS mixed
+                    SUM(CASE WHEN json_extract(e.metadata_json, '$.sentiment_label') = 'positive' THEN 1 ELSE 0 END) AS positive_count,
+                    SUM(CASE WHEN json_extract(e.metadata_json, '$.sentiment_label') = 'negative' THEN 1 ELSE 0 END) AS negative_count,
+                    SUM(CASE WHEN json_extract(e.metadata_json, '$.sentiment_label') = 'neutral' THEN 1 ELSE 0 END) AS neutral_count,
+                    SUM(CASE WHEN json_extract(e.metadata_json, '$.sentiment_label') = 'mixed' THEN 1 ELSE 0 END) AS mixed_count
                 FROM documents d
                 JOIN enrichments e ON e.document_id = d.id
                 WHERE 1=1 {where_sql}

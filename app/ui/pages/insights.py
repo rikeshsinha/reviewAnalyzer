@@ -45,18 +45,34 @@ def _coverage_label(filters: dict[str, Any]) -> str:
 
 
 def _render_sentiment_charts(metrics: dict[str, Any]) -> None:
-    sentiment_trend_df = pd.DataFrame(metrics.get("daily_sentiment_trend", []))
+    trend_rows = metrics.get("daily_sentiment_trend", [])
+    if not trend_rows and metrics.get("daily_negative_trend"):
+        trend_rows = metrics.get("daily_negative_trend", [])
+
+    sentiment_trend_df = pd.DataFrame(trend_rows)
     if sentiment_trend_df.empty:
         st.info("No daily sentiment trend data for current filters.")
         return
 
+    legacy_column_map = {
+        "positive": "positive_count",
+        "negative": "negative_count",
+        "neutral": "neutral_count",
+        "mixed": "mixed_count",
+    }
+    sentiment_trend_df = sentiment_trend_df.rename(columns=legacy_column_map)
+    for required_column in ["positive_count", "negative_count", "neutral_count", "mixed_count"]:
+        if required_column not in sentiment_trend_df.columns:
+            sentiment_trend_df[required_column] = 0
+
     sentiment_trend_df = sentiment_trend_df.sort_values("day")
     melted_df = sentiment_trend_df.melt(
         id_vars=["day"],
-        value_vars=["positive", "negative", "neutral", "mixed"],
+        value_vars=["positive_count", "negative_count", "neutral_count", "mixed_count"],
         var_name="sentiment",
         value_name="count",
     )
+    melted_df["sentiment"] = melted_df["sentiment"].str.replace("_count", "", regex=False)
     sentiment_color_map = {
         "positive": "#2E7D32",  # green
         "negative": "#C62828",  # red
