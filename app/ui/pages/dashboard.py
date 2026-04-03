@@ -63,6 +63,53 @@ def _where_clause(filters: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     return " ".join(where_parts), params
 
 
+def _fetch_ranked_complaints(session: Any, filters: dict[str, Any]) -> list[dict[str, Any]]:
+    where_sql, params = _where_clause(filters)
+    issue_category = filters.get("issue_category")
+    issue_filter_sql = ""
+    if issue_category and issue_category != "All":
+        issue_filter_sql = " AND COALESCE(json_extract(e.metadata_json, '$.primary_issue_category'), 'other') = :issue_category"
+        params["issue_category"] = issue_category
+
+    rows = session.execute(
+        text(
+            f"""
+            SELECT
+                d.id,
+                COALESCE(d.published_at, d.created_at) AS published_at,
+                d.title,
+                d.body,
+                d.url,
+                COALESCE(json_extract(e.metadata_json, '$.primary_issue_category'), 'other') AS issue_category,
+                COALESCE(json_extract(e.metadata_json, '$.sentiment_label'), 'neutral') AS sentiment_label,
+                CASE COALESCE(json_extract(e.metadata_json, '$.sentiment_label'), 'neutral')
+                    WHEN 'negative' THEN 3
+                    WHEN 'mixed' THEN 2
+                    WHEN 'neutral' THEN 1
+                    WHEN 'positive' THEN 0
+                    ELSE 1
+                END AS severity_rank
+            FROM documents d
+            JOIN enrichments e ON e.document_id = d.id
+            WHERE 1=1 {where_sql} {issue_filter_sql}
+            ORDER BY severity_rank DESC, COALESCE(d.published_at, d.created_at) DESC, d.id DESC
+            LIMIT 100
+            """
+        ),
+        params,
+    ).fetchall()
+    return [dict(row._mapping) for row in rows]
+
+
+@st.cache_data(ttl=90)
+def _load_ranked_complaints(filters: dict[str, Any]) -> list[dict[str, Any]]:
+    session = SessionLocal()
+    try:
+        return _fetch_ranked_complaints(session, filters)
+    finally:
+        session.close()
+
+
 @st.cache_data(ttl=90)
 def _load_dashboard_data(filters: dict[str, Any]) -> dict[str, Any]:
     session = SessionLocal()
@@ -98,23 +145,6 @@ def _load_dashboard_data(filters: dict[str, Any]) -> dict[str, Any]:
             params,
         ).fetchall()
 
-        complaints_rows = session.execute(
-            text(
-                f"""
-                SELECT
-                    COALESCE(json_extract(e.metadata_json, '$.primary_issue_category'), 'other') AS issue,
-                    COUNT(*) AS mentions
-                FROM documents d
-                JOIN enrichments e ON e.document_id = d.id
-                WHERE 1=1 {where_sql}
-                GROUP BY issue
-                ORDER BY mentions DESC
-                LIMIT 8
-                """
-            ),
-            params,
-        ).fetchall()
-
         sentiment_rows = session.execute(
             text(
                 f"""
@@ -134,7 +164,6 @@ def _load_dashboard_data(filters: dict[str, Any]) -> dict[str, Any]:
         return {
             "totals": dict(totals._mapping) if totals else {},
             "trend": [dict(row._mapping) for row in trend_rows],
-            "complaints": [dict(row._mapping) for row in complaints_rows],
             "sentiment": [dict(row._mapping) for row in sentiment_rows],
         }
     finally:
@@ -161,13 +190,35 @@ def render(filters: dict[str, Any]) -> None:
 
     left, right = st.columns(2)
 
-    complaints_df = pd.DataFrame(payload["complaints"])
+    complaints_filters = dict(filters)
+    complaints_rows = _load_ranked_complaints(complaints_filters)
+    complaints_df = pd.DataFrame(complaints_rows)
     with left:
         st.markdown("#### Top complaints")
         if complaints_df.empty:
-            st.info("No complaint categories matched these filters yet.")
+            st.info("No complaint examples matched these filters yet.")
         else:
-            st.dataframe(complaints_df, width="stretch")
+            categories = sorted(complaints_df["issue_category"].dropna().unique().tolist())
+            selected_issue = st.selectbox(
+                "Issue category",
+                options=["All", *categories],
+                index=0,
+                key="dashboard_issue_category",
+            )
+            visible_df = complaints_df
+            if selected_issue != "All":
+                visible_df = complaints_df[complaints_df["issue_category"] == selected_issue]
+
+            display_df = visible_df[
+                ["published_at", "issue_category", "sentiment_label", "title", "body", "url"]
+            ].copy()
+            st.caption("Ranked by sentiment label severity (negative > mixed > neutral > positive).")
+            st.dataframe(
+                display_df,
+                width="stretch",
+                column_config={"url": st.column_config.LinkColumn("Source", display_text="Open")},
+                hide_index=True,
+            )
 
     sentiment_df = pd.DataFrame(payload["sentiment"])
     with right:
