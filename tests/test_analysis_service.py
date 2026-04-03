@@ -7,6 +7,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 
 from app.services.analysis_service import AnalysisConfig, AnalysisService
+from app.ui.pages.dashboard import _fetch_ranked_complaints
 
 
 def _build_session() -> Session:
@@ -132,3 +133,122 @@ def test_complaints_insight_includes_other_category() -> None:
     assert payload["metrics"]["complaint_docs"] == 2
     categories = {row["category"] for row in payload["metrics"]["top_issue_categories"]}
     assert "other" in categories
+
+
+def test_dashboard_ranked_complaints_can_filter_by_issue_category() -> None:
+    session = _build_session()
+    source_id = int(
+        session.execute(
+            text(
+                """
+                INSERT INTO sources (platform, external_id, name, metadata_json)
+                VALUES ('reddit', 'reddit', 'reddit', '{}')
+                """
+            )
+        ).lastrowid
+    )
+
+    seeded_rows = [
+        ("doc-1", "Bug report", "fails to sync", "https://example.com/1", "2026-03-01T10:00:00", "bug", "negative"),
+        ("doc-2", "Perf report", "app is slow", "https://example.com/2", "2026-03-02T10:00:00", "performance", "mixed"),
+    ]
+    for external_id, title, body, url, published_at, category, sentiment in seeded_rows:
+        doc_id = int(
+            session.execute(
+                text(
+                    """
+                    INSERT INTO documents (source_id, external_id, title, body, author, url, published_at, raw_json)
+                    VALUES (:source_id, :external_id, :title, :body, 'u', :url, :published_at, '{}')
+                    """
+                ),
+                {
+                    "source_id": source_id,
+                    "external_id": external_id,
+                    "title": title,
+                    "body": body,
+                    "url": url,
+                    "published_at": published_at,
+                },
+            ).lastrowid
+        )
+        session.execute(
+            text(
+                """
+                INSERT INTO enrichments (document_id, model_name, summary, metadata_json)
+                VALUES (:document_id, 'mock', 'summary', :metadata_json)
+                """
+            ),
+            {
+                "document_id": doc_id,
+                "metadata_json": json.dumps(
+                    {"primary_issue_category": category, "sentiment_label": sentiment}
+                ),
+            },
+        )
+    session.commit()
+
+    complaints = _fetch_ranked_complaints(session, {"issue_category": "bug"})
+
+    assert len(complaints) == 1
+    assert complaints[0]["issue_category"] == "bug"
+    assert complaints[0]["title"] == "Bug report"
+
+
+def test_dashboard_ranked_complaints_orders_by_severity_then_recency() -> None:
+    session = _build_session()
+    source_id = int(
+        session.execute(
+            text(
+                """
+                INSERT INTO sources (platform, external_id, name, metadata_json)
+                VALUES ('reddit', 'reddit', 'reddit', '{}')
+                """
+            )
+        ).lastrowid
+    )
+
+    seeded_rows = [
+        ("doc-neg-old", "Negative old", "old negative", "https://example.com/neg-old", "2026-03-01T09:00:00", "bug", "negative"),
+        ("doc-mixed", "Mixed", "mixed signal", "https://example.com/mixed", "2026-03-03T09:00:00", "bug", "mixed"),
+        ("doc-neg-new", "Negative new", "new negative", "https://example.com/neg-new", "2026-03-02T09:00:00", "bug", "negative"),
+        ("doc-neutral", "Neutral", "neutral text", "https://example.com/neutral", "2026-03-04T09:00:00", "bug", "neutral"),
+    ]
+    for external_id, title, body, url, published_at, category, sentiment in seeded_rows:
+        doc_id = int(
+            session.execute(
+                text(
+                    """
+                    INSERT INTO documents (source_id, external_id, title, body, author, url, published_at, raw_json)
+                    VALUES (:source_id, :external_id, :title, :body, 'u', :url, :published_at, '{}')
+                    """
+                ),
+                {
+                    "source_id": source_id,
+                    "external_id": external_id,
+                    "title": title,
+                    "body": body,
+                    "url": url,
+                    "published_at": published_at,
+                },
+            ).lastrowid
+        )
+        session.execute(
+            text(
+                """
+                INSERT INTO enrichments (document_id, model_name, summary, metadata_json)
+                VALUES (:document_id, 'mock', 'summary', :metadata_json)
+                """
+            ),
+            {
+                "document_id": doc_id,
+                "metadata_json": json.dumps(
+                    {"primary_issue_category": category, "sentiment_label": sentiment}
+                ),
+            },
+        )
+    session.commit()
+
+    complaints = _fetch_ranked_complaints(session, {})
+    ordered_titles = [row["title"] for row in complaints]
+
+    assert ordered_titles[:4] == ["Negative new", "Negative old", "Mixed", "Neutral"]
