@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 from typing import Any
 
 import requests
@@ -23,6 +23,26 @@ from app.ingestion.registry import get_adapter_class
 from app.utils.logging_config import setup_logging
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_ingestion_window(days_back: int) -> tuple[datetime, datetime]:
+    date_from_raw = os.getenv("REDDIT_INGEST_DATE_FROM", "").strip()
+    date_to_raw = os.getenv("REDDIT_INGEST_DATE_TO", "").strip()
+    if date_from_raw and date_to_raw:
+        try:
+            date_from = datetime.strptime(date_from_raw, "%Y-%m-%d").date()
+            date_to = datetime.strptime(date_to_raw, "%Y-%m-%d").date()
+        except ValueError as exc:
+            raise ValueError("REDDIT_INGEST_DATE_FROM/TO must be YYYY-MM-DD") from exc
+        if date_from > date_to:
+            raise ValueError("REDDIT_INGEST_DATE_FROM cannot be after REDDIT_INGEST_DATE_TO")
+        after_dt = datetime.combine(date_from, time.min, tzinfo=timezone.utc)
+        before_dt = datetime.combine(date_to, time.max, tzinfo=timezone.utc)
+        return after_dt, before_dt
+
+    now_utc = datetime.now(tz=timezone.utc)
+    after_dt = now_utc - timedelta(days=max(days_back, 0))
+    return after_dt, now_utc
 
 
 def _ensure_source(session: Any, platform: str) -> int:
@@ -126,15 +146,16 @@ def _run_pushshift_ingestion(
     config: dict[str, Any],
     *,
     days_back: int,
+    ingestion_window: tuple[datetime, datetime] | None = None,
     settings: IngestionSettings | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
     subreddits = [item for item in config.get("subreddits", []) if isinstance(item, str) and item.strip()]
     keywords = [item for item in config.get("keywords", []) if isinstance(item, str) and item.strip()]
     post_limit = int(config.get("post_limit", 200))
 
-    now_utc = datetime.now(tz=timezone.utc)
-    after = int((now_utc - timedelta(days=max(days_back, 0))).timestamp())
-    before = int(now_utc.timestamp())
+    after_dt, before_dt = ingestion_window or _resolve_ingestion_window(days_back)
+    after = int(after_dt.timestamp())
+    before = int(before_dt.timestamp())
 
     active_settings = settings or get_ingestion_settings()
     base_url = active_settings.reddit_pushshift_base_url or None
@@ -169,14 +190,15 @@ def _run_public_json_ingestion(
     config: dict[str, Any],
     *,
     days_back: int,
+    ingestion_window: tuple[datetime, datetime] | None = None,
     settings: IngestionSettings | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
     subreddits = [item for item in config.get("subreddits", []) if isinstance(item, str) and item.strip()]
     keywords = [item for item in config.get("keywords", []) if isinstance(item, str) and item.strip()]
 
-    now_utc = datetime.now(tz=timezone.utc)
-    after_iso = (now_utc - timedelta(days=max(days_back, 0))).isoformat()
-    before_iso = now_utc.isoformat()
+    after_dt, before_dt = ingestion_window or _resolve_ingestion_window(days_back)
+    after_iso = after_dt.isoformat()
+    before_iso = before_dt.isoformat()
 
     active_settings = settings or get_ingestion_settings()
     page_size = active_settings.public_reddit_page_size
@@ -225,14 +247,15 @@ def _run_rss_ingestion(
     config: dict[str, Any],
     *,
     days_back: int,
+    ingestion_window: tuple[datetime, datetime] | None = None,
     settings: IngestionSettings | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
     subreddits = [item for item in config.get("subreddits", []) if isinstance(item, str) and item.strip()]
     keywords = [item for item in config.get("keywords", []) if isinstance(item, str) and item.strip()]
 
-    now_utc = datetime.now(tz=timezone.utc)
-    after_iso = (now_utc - timedelta(days=max(days_back, 0))).isoformat()
-    before_iso = now_utc.isoformat()
+    after_dt, before_dt = ingestion_window or _resolve_ingestion_window(days_back)
+    after_iso = after_dt.isoformat()
+    before_iso = before_dt.isoformat()
 
     max_pages = int(os.getenv("REDDIT_RSS_MAX_PAGES", "3"))
     delay_seconds = float(os.getenv("REDDIT_RSS_DELAY_SECONDS", "1.0"))
@@ -277,6 +300,8 @@ def run_for_platform(platform: str, config: dict[str, Any], *, days_back: int) -
 
     try:
         settings = get_ingestion_settings()
+        ingestion_after_dt, ingestion_before_dt = _resolve_ingestion_window(days_back)
+        ingestion_window = (ingestion_after_dt, ingestion_before_dt)
         _safe_ensure_dedupe_constraints(session)
         source_id = _ensure_reddit_source(session) if platform == "reddit" else _ensure_source(session, platform)
         session.commit()
@@ -284,6 +309,16 @@ def run_for_platform(platform: str, config: dict[str, Any], *, days_back: int) -
         run_id = run_repo.start_run(source_name=platform)
         fetch_backend = settings.reddit_fetch_backend.strip().lower()
         if platform == "reddit":
+            logger.info(
+                "Reddit ingestion window resolved",
+                extra={
+                    "date_from": ingestion_after_dt.date().isoformat(),
+                    "date_to": ingestion_before_dt.date().isoformat(),
+                    "after_iso": ingestion_after_dt.isoformat(),
+                    "before_iso": ingestion_before_dt.isoformat(),
+                    "days_back_default": days_back,
+                },
+            )
             docs = []
             fetched_count = 0
 
@@ -297,7 +332,11 @@ def run_for_platform(platform: str, config: dict[str, Any], *, days_back: int) -
 
                 for backend_name, backend_runner in fallback_chain:
                     try:
-                        candidate_docs, candidate_count = backend_runner(config, days_back=days_back)
+                        candidate_docs, candidate_count = backend_runner(
+                            config,
+                            days_back=days_back,
+                            ingestion_window=ingestion_window,
+                        )
                     except (PushshiftError, PublicRedditError, requests.RequestException) as exc:
                         message = f"{backend_name} failed: {exc}"
                         failover_events.append(message)
@@ -326,18 +365,30 @@ def run_for_platform(platform: str, config: dict[str, Any], *, days_back: int) -
 
                 if fetched_count == 0:
                     details = "; ".join(failover_events) if failover_events else "No backend attempts were executed"
-                    raise RuntimeError(f"Reddit ingestion failed: all backend attempts returned zero docs ({details})")
+                    raise RuntimeError(
+                        "Reddit ingestion failed: all backend attempts returned zero docs "
+                        f"({details}); window={ingestion_after_dt.date().isoformat()}.."
+                        f"{ingestion_before_dt.date().isoformat()}"
+                    )
             elif fetch_backend == "public_json":
                 failover_events = []
                 try:
-                    docs, fetched_count = _run_public_json_ingestion(config, days_back=days_back)
+                    docs, fetched_count = _run_public_json_ingestion(
+                        config,
+                        days_back=days_back,
+                        ingestion_window=ingestion_window,
+                    )
                 except (PublicRedditError, requests.RequestException) as exc:
                     failover_events.append(f"public_json failed: {exc}")
                     logger.warning(
                         "Reddit ingestion backend failed",
                         extra={"backend": "public_json", "error": str(exc)},
                     )
-                    docs, fetched_count = _run_rss_ingestion(config, days_back=days_back)
+                    docs, fetched_count = _run_rss_ingestion(
+                        config,
+                        days_back=days_back,
+                        ingestion_window=ingestion_window,
+                    )
                     if fetched_count > 0:
                         logger.info(
                             "Reddit ingestion succeeded after failover",

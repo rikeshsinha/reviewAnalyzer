@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from datetime import date, timedelta
+import os
 from pathlib import Path
 from typing import Any
 
@@ -81,12 +83,16 @@ def _load_last_enrichment_runs() -> list[dict[str, Any]]:
         session.close()
 
 
-def _run_command(module: str) -> tuple[bool, str]:
+def _run_command(module: str, env_overrides: dict[str, str] | None = None) -> tuple[bool, str]:
+    env = os.environ.copy()
+    if env_overrides:
+        env.update(env_overrides)
     proc = subprocess.run(
         [sys.executable, "-m", module],
         capture_output=True,
         text=True,
         check=False,
+        env=env,
     )
     output = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
     return proc.returncode == 0, output.strip()
@@ -253,11 +259,39 @@ def _reset_to_defaults_callback() -> None:
 def render(filters: dict[str, Any]) -> None:
     st.subheader("Admin")
 
+    default_to = date.today()
+    default_from = default_to - timedelta(days=30)
+    date_range = st.date_input(
+        "Ingestion date range",
+        value=(default_from, default_to),
+        help="Applies only to the 'Refresh Reddit ingestion' action on this page.",
+    )
+    ingestion_date_from: date | None = None
+    ingestion_date_to: date | None = None
+
+    if isinstance(date_range, tuple) and len(date_range) == 2:
+        ingestion_date_from, ingestion_date_to = date_range
+    elif isinstance(date_range, list) and len(date_range) == 2:
+        ingestion_date_from, ingestion_date_to = date_range[0], date_range[1]
+
+    invalid_date_range = (
+        ingestion_date_from is None or ingestion_date_to is None or ingestion_date_from > ingestion_date_to
+    )
+    if invalid_date_range:
+        st.error("Invalid ingestion date range: start date must be on or before end date.")
+
     c1, c2, c3 = st.columns(3)
     with c1:
         if st.button("Refresh Reddit ingestion"):
+            if invalid_date_range or ingestion_date_from is None or ingestion_date_to is None:
+                st.error("Please select a valid ingestion date range before running refresh.")
+                st.stop()
+            env_overrides = {
+                "REDDIT_INGEST_DATE_FROM": ingestion_date_from.isoformat(),
+                "REDDIT_INGEST_DATE_TO": ingestion_date_to.isoformat(),
+            }
             with st.spinner("Running Reddit ingestion job..."):
-                ok, logs = _run_command("app.jobs.refresh_reddit")
+                ok, logs = _run_command("app.jobs.refresh_reddit", env_overrides=env_overrides)
             (st.success if ok else st.error)("Refresh completed." if ok else "Refresh failed.")
             st.code(logs or "No output")
 

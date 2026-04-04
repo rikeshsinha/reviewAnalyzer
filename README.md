@@ -136,10 +136,16 @@ Run Reddit ingestion job (works for `public_json`, `pushshift`, and adapter-back
 python -m app.jobs.refresh_reddit
 ```
 
+Optional one-off date override (used by Admin refresh button and can also be set for CLI runs):
+
+```bash
+REDDIT_INGEST_DATE_FROM=2026-03-01 REDDIT_INGEST_DATE_TO=2026-03-07 python -m app.jobs.refresh_reddit
+```
+
 What it does in non-PRAW modes (`public_json` / `pushshift`):
 
 - Reads configured subreddit list + keyword list from source config.
-- Builds a UTC date window from `days_back` (e.g., last 30 days).
+- Resolves a UTC date window from `REDDIT_INGEST_DATE_FROM`/`REDDIT_INGEST_DATE_TO` when both are set; otherwise falls back to `days_back` (e.g., last 30 days).
 - Queries each backend by `(subreddit × keyword)` combinations.
 - Normalizes each record into internal document shape.
 - Deduplicates by external ID and DB dedupe keys.
@@ -155,6 +161,7 @@ Behavior notes:
 - In `public_json` mode, each `(subreddit, keyword)` pair is handled independently; if one pair returns a 403/error, that pair is skipped and the batch continues with remaining pairs.
 - If all attempted backends fail or return zero docs, ingestion run status is marked `failed` with details in `ingestion_runs.error_message`.
 - Results are inserted with `INSERT OR IGNORE`, so reruns do not duplicate existing docs.
+- Admin page date override only affects that specific **Refresh Reddit ingestion** job execution; it does **not** change global/sidebar analysis filters.
 
 Quick syntax regression check for critical ingestion/retrieval modules:
 
