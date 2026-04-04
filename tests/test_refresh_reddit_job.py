@@ -394,6 +394,11 @@ def test_run_for_platform_uses_pushshift_backend_and_persists_reddit_payload(mon
     row = session.execute(text("SELECT raw_json FROM documents WHERE external_id='abc123' LIMIT 1")).first()
     assert row is not None
     payload = json.loads(row.raw_json)
+    run_row = session.execute(
+        text("SELECT status, records_fetched, records_inserted, error_message FROM ingestion_runs ORDER BY id DESC LIMIT 1")
+    ).first()
+    assert run_row is not None
+    diagnostics = json.loads(run_row.error_message)
 
     assert stats == {"records_fetched": 1, "records_inserted": 1}
     assert pushshift_calls == [
@@ -404,6 +409,13 @@ def test_run_for_platform_uses_pushshift_backend_and_persists_reddit_payload(mon
     ]
     assert payload["platform"] == "reddit"
     assert payload["raw_payload"] == {"id": "abc123", "source": "pushshift"}
+    assert run_row.status == "completed"
+    assert run_row.records_fetched == 1
+    assert run_row.records_inserted == 1
+    assert diagnostics["backend_requested"] == "pushshift"
+    assert diagnostics["backend_used"] == "pushshift"
+    assert diagnostics["counters"]["normalize_count"] == 1
+    assert diagnostics["counters"]["inserted_count"] == 1
 
 
 def test_run_for_platform_uses_public_json_backend(monkeypatch) -> None:
@@ -509,6 +521,9 @@ def test_run_for_platform_falls_back_to_public_json_when_pushshift_fails(monkeyp
         {"subreddits": ["android"], "keywords": ["workout"], "post_limit": 10},
         days_back=7,
     )
+    run_row = session.execute(text("SELECT error_message FROM ingestion_runs ORDER BY id DESC LIMIT 1")).first()
+    assert run_row is not None
+    diagnostics = json.loads(run_row.error_message)
 
     assert stats == {"records_fetched": 1, "records_inserted": 1}
     assert fallback_calls == [
@@ -517,6 +532,8 @@ def test_run_for_platform_falls_back_to_public_json_when_pushshift_fails(monkeyp
             "days_back": 7,
         }
     ]
+    assert diagnostics["fallback_activated"] is True
+    assert diagnostics["backend_used"] == "public_json"
 
 
 def test_run_rss_ingestion_returns_normalized_docs(monkeypatch) -> None:
@@ -680,4 +697,6 @@ def test_run_for_platform_marks_failed_when_all_failovers_return_zero_docs(monke
     ).first()
     assert run_row is not None
     assert run_row.status == "failed"
-    assert "returned zero docs" in run_row.error_message
+    diagnostics = json.loads(run_row.error_message)
+    assert diagnostics["first_failing_stage"] == "fetch"
+    assert "returned zero docs" in diagnostics["error_summary"]
