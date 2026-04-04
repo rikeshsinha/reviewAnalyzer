@@ -193,6 +193,11 @@ streamlit run streamlit_app.py
 
 (Equivalent launcher exists at `app/ui/streamlit_app.py` if needed.)
 
+Date-range defaults in the UI:
+
+- **Global sidebar Date range** defaults to the **last 30 days** (`today - 30 days` to `today`) and is fully user-editable without DB min/max clamping.
+- **Admin → Ingestion date range** also defaults to the **last 30 days**, remains independent from global analysis filters, and is passed to `refresh_reddit` via `REDDIT_INGEST_DATE_FROM` / `REDDIT_INGEST_DATE_TO` for that run.
+
 ---
 
 ## 9) Example Samsung Health workflow

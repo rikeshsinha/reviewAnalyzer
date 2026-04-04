@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 import streamlit as st
@@ -12,15 +12,6 @@ from sqlalchemy.exc import OperationalError
 from app.db.session import SessionLocal, bootstrap_database
 from app.ui.pages import admin, ask, dashboard, explorer, insights
 
-
-def _coerce_date(raw_value: Any) -> date | None:
-    if raw_value is None:
-        return None
-    text_value = str(raw_value)
-    try:
-        return date.fromisoformat(text_value[:10])
-    except ValueError:
-        return None
 
 
 @st.cache_data(ttl=120)
@@ -139,20 +130,22 @@ def _build_sidebar_filters() -> dict[str, Any]:
     if options.get("db_unavailable", ["false"])[0] == "true":
         st.warning("Database not initialized yet. Run initialization/refresh.")
 
-    min_date = _coerce_date(options.get("min_date", [None])[0]) or date.today()
-    max_date = _coerce_date(options.get("max_date", [None])[0]) or date.today()
+    default_date_to = date.today()
+    default_date_from = default_date_to - timedelta(days=30)
 
     st.sidebar.header("Global filters")
     selected_dates = st.sidebar.date_input(
         "Date range",
-        value=(min_date, max_date),
-        min_value=min_date,
-        max_value=max_date,
+        value=(default_date_from, default_date_to),
     )
     if isinstance(selected_dates, tuple) and len(selected_dates) == 2:
         date_from, date_to = selected_dates
+    elif isinstance(selected_dates, list) and len(selected_dates) == 2:
+        date_from, date_to = selected_dates[0], selected_dates[1]
+    elif isinstance(selected_dates, date):
+        date_from, date_to = selected_dates, selected_dates
     else:
-        date_from, date_to = min_date, max_date
+        date_from, date_to = default_date_from, default_date_to
 
     source_label_to_value = {
         "All": None,
