@@ -2,21 +2,21 @@
 
 from __future__ import annotations
 
+import importlib
 from datetime import date, timedelta
+from pathlib import Path
 from typing import Any
 
 import streamlit as st
 from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 
-from app.db.session import SessionLocal, bootstrap_database
-from app.ui.pages import admin, ask, dashboard, explorer, insights
-
-
 
 @st.cache_data(ttl=120)
 def _get_filter_options() -> dict[str, list[str]]:
     """Load sidebar filter options from DB and cache briefly for responsiveness."""
+
+    from app.db.session import SessionLocal
 
     default_options = {
         "min_date": [""],
@@ -182,9 +182,67 @@ def _build_sidebar_filters() -> dict[str, Any]:
     }
 
 
+def _verify_package_markers() -> list[str]:
+    required = [
+        Path("app/__init__.py"),
+        Path("app/db/__init__.py"),
+        Path("app/ui/__init__.py"),
+        Path("app/ui/pages/__init__.py"),
+    ]
+    missing = [str(path) for path in required if not path.exists()]
+    return missing
+
+
+def _startup_self_check() -> tuple[bool, str | None, str | None]:
+    missing_markers = _verify_package_markers()
+    if missing_markers:
+        return False, "package markers", f"Missing __init__.py files: {', '.join(missing_markers)}"
+
+    required_modules = [
+        "app",
+        "app.db",
+        "app.db.session",
+        "app.ui",
+        "app.ui.pages",
+        "app.ui.pages.dashboard",
+        "app.ui.pages.insights",
+        "app.ui.pages.explorer",
+        "app.ui.pages.ask",
+        "app.ui.pages.admin",
+    ]
+    for module_name in required_modules:
+        try:
+            importlib.import_module(module_name)
+        except Exception as exc:  # pragma: no cover - diagnostic surface
+            return False, module_name, str(exc)
+    return True, None, None
+
+
+def _show_startup_error(module_name: str | None, details: str | None) -> None:
+    failing_module = module_name or "unknown"
+    st.error(
+        "\n".join(
+            [
+                "Startup import check failed.",
+                f"Failing module: {failing_module}",
+                "Recommended action: restart the app, clear Streamlit cache, and verify package markers (__init__.py).",
+                f"Details: {details or 'No extra details available.'}",
+            ]
+        )
+    )
+
+
 def main() -> None:
     st.set_page_config(page_title="Review Analyzer", layout="wide")
     st.title("Review Analyzer UI")
+
+    ok, module_name, details = _startup_self_check()
+    if not ok:
+        _show_startup_error(module_name, details)
+        return
+
+    from app.db.session import bootstrap_database
+    from app.ui.pages import admin, ask, dashboard, explorer, insights
 
     if not st.session_state.get("_db_bootstrapped", False):
         bootstrap_database()
