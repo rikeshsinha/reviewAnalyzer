@@ -193,6 +193,12 @@ streamlit run streamlit_app.py
 
 (Equivalent launcher exists at `app/ui/streamlit_app.py` if needed.)
 
+Quick import smoke test for startup-module wiring:
+
+```bash
+python -c "from app.ui.streamlit_app import main; print('ok')"
+```
+
 Date-range defaults in the UI:
 
 - **Global sidebar Date range** defaults to the **last 30 days** (`today - 30 days` to `today`) and is fully user-editable without DB min/max clamping.
