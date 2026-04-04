@@ -25,6 +25,61 @@ from app.utils.logging_config import setup_logging
 logger = logging.getLogger(__name__)
 
 
+def _build_ingestion_diagnostics(
+    platform: str,
+    config: dict[str, Any],
+    *,
+    days_back: int,
+    ingestion_window: tuple[datetime, datetime],
+    backend_requested: str | None,
+) -> dict[str, Any]:
+    subreddits = [item for item in config.get("subreddits", []) if isinstance(item, str) and item.strip()]
+    keywords = [item for item in config.get("keywords", []) if isinstance(item, str) and item.strip()]
+    return {
+        "platform": platform,
+        "backend_requested": backend_requested,
+        "backend_used": None,
+        "fallback_activated": False,
+        "fallback_chain": [],
+        "effective_config": {
+            "subreddits": subreddits,
+            "keywords": keywords,
+            "post_limit": int(config.get("post_limit", 200)),
+            "days_back": days_back,
+            "date_from": ingestion_window[0].isoformat(),
+            "date_to": ingestion_window[1].isoformat(),
+        },
+        "stages": {
+            "fetch": {"status": "pending"},
+            "normalize": {"status": "pending", "count": 0},
+            "dedupe": {"status": "pending", "skipped": 0},
+            "insert": {"status": "pending", "inserted": 0},
+            "enrich_trigger": {"status": "pending"},
+        },
+        "counters": {
+            "fetch_started": 0,
+            "fetch_succeeded": 0,
+            "fetch_failed": 0,
+            "normalize_count": 0,
+            "dedupe_skipped": 0,
+            "inserted_count": 0,
+        },
+        "first_failing_stage": None,
+        "error_summary": None,
+    }
+
+
+def _record_stage_failure(diagnostics: dict[str, Any], stage: str, exc: Exception) -> None:
+    diagnostics["stages"].setdefault(stage, {})
+    diagnostics["stages"][stage]["status"] = "failed"
+    diagnostics["stages"][stage]["error"] = {
+        "class": exc.__class__.__name__,
+        "message": str(exc),
+    }
+    diagnostics["first_failing_stage"] = diagnostics["first_failing_stage"] or stage
+    diagnostics["error_summary"] = f"{exc.__class__.__name__}: {exc}"
+
+
 def _resolve_ingestion_window(days_back: int) -> tuple[datetime, datetime]:
     date_from_raw = os.getenv("REDDIT_INGEST_DATE_FROM", "").strip()
     date_to_raw = os.getenv("REDDIT_INGEST_DATE_TO", "").strip()
@@ -297,18 +352,30 @@ def run_for_platform(platform: str, config: dict[str, Any], *, days_back: int) -
     session = SessionLocal()
     run_repo = IngestionRunRepository(session)
     run_id: int | None = None
+    diagnostics: dict[str, Any] = {}
+    fetched_count = 0
+    inserted = 0
 
     try:
         settings = get_ingestion_settings()
         ingestion_after_dt, ingestion_before_dt = _resolve_ingestion_window(days_back)
         ingestion_window = (ingestion_after_dt, ingestion_before_dt)
+        fetch_backend = settings.reddit_fetch_backend.strip().lower() if platform == "reddit" else None
+        diagnostics = _build_ingestion_diagnostics(
+            platform,
+            config,
+            days_back=days_back,
+            ingestion_window=ingestion_window,
+            backend_requested=fetch_backend,
+        )
         _safe_ensure_dedupe_constraints(session)
         source_id = _ensure_reddit_source(session) if platform == "reddit" else _ensure_source(session, platform)
         session.commit()
 
         run_id = run_repo.start_run(source_name=platform)
-        fetch_backend = settings.reddit_fetch_backend.strip().lower()
         if platform == "reddit":
+            diagnostics["stages"]["fetch"]["status"] = "running"
+            diagnostics["counters"]["fetch_started"] = 1
             logger.info(
                 "Reddit ingestion window resolved",
                 extra={
@@ -320,7 +387,6 @@ def run_for_platform(platform: str, config: dict[str, Any], *, days_back: int) -
                 },
             )
             docs = []
-            fetched_count = 0
 
             if fetch_backend == "pushshift":
                 failover_events: list[str] = []
@@ -332,12 +398,19 @@ def run_for_platform(platform: str, config: dict[str, Any], *, days_back: int) -
 
                 for backend_name, backend_runner in fallback_chain:
                     try:
+                        diagnostics["fallback_chain"].append({"backend": backend_name, "status": "running"})
                         candidate_docs, candidate_count = backend_runner(
                             config,
                             days_back=days_back,
                             ingestion_window=ingestion_window,
                         )
                     except (PushshiftError, PublicRedditError, requests.RequestException) as exc:
+                        diagnostics["counters"]["fetch_failed"] += 1
+                        diagnostics["fallback_chain"][-1]["status"] = "failed"
+                        diagnostics["fallback_chain"][-1]["error"] = {
+                            "class": exc.__class__.__name__,
+                            "message": str(exc),
+                        }
                         message = f"{backend_name} failed: {exc}"
                         failover_events.append(message)
                         logger.warning(
@@ -349,7 +422,12 @@ def run_for_platform(platform: str, config: dict[str, Any], *, days_back: int) -
                     if candidate_count > 0:
                         docs = candidate_docs
                         fetched_count = candidate_count
+                        diagnostics["backend_used"] = backend_name
+                        diagnostics["stages"]["fetch"]["status"] = "succeeded"
+                        diagnostics["counters"]["fetch_succeeded"] = candidate_count
+                        diagnostics["fallback_chain"][-1]["status"] = "succeeded"
                         if failover_events:
+                            diagnostics["fallback_activated"] = True
                             logger.info(
                                 "Reddit ingestion succeeded after failover",
                                 extra={
@@ -361,15 +439,19 @@ def run_for_platform(platform: str, config: dict[str, Any], *, days_back: int) -
                         break
 
                     failover_events.append(f"{backend_name} returned 0 docs")
+                    diagnostics["fallback_chain"][-1]["status"] = "empty"
                     logger.info("Reddit ingestion backend returned 0 docs", extra={"backend": backend_name})
 
                 if fetched_count == 0:
+                    diagnostics["counters"]["fetch_failed"] += 1
                     details = "; ".join(failover_events) if failover_events else "No backend attempts were executed"
-                    raise RuntimeError(
+                    failure = RuntimeError(
                         "Reddit ingestion failed: all backend attempts returned zero docs "
                         f"({details}); window={ingestion_after_dt.date().isoformat()}.."
                         f"{ingestion_before_dt.date().isoformat()}"
                     )
+                    _record_stage_failure(diagnostics, "fetch", failure)
+                    raise failure
             elif fetch_backend == "public_json":
                 failover_events = []
                 try:
@@ -378,7 +460,13 @@ def run_for_platform(platform: str, config: dict[str, Any], *, days_back: int) -
                         days_back=days_back,
                         ingestion_window=ingestion_window,
                     )
+                    diagnostics["backend_used"] = "public_json"
+                    diagnostics["counters"]["fetch_succeeded"] = fetched_count
+                    diagnostics["stages"]["fetch"]["status"] = "succeeded" if fetched_count > 0 else "empty"
+                    if fetched_count == 0:
+                        diagnostics["counters"]["fetch_failed"] += 1
                 except (PublicRedditError, requests.RequestException) as exc:
+                    diagnostics["counters"]["fetch_failed"] += 1
                     failover_events.append(f"public_json failed: {exc}")
                     logger.warning(
                         "Reddit ingestion backend failed",
@@ -389,6 +477,10 @@ def run_for_platform(platform: str, config: dict[str, Any], *, days_back: int) -
                         days_back=days_back,
                         ingestion_window=ingestion_window,
                     )
+                    diagnostics["fallback_activated"] = True
+                    diagnostics["backend_used"] = "rss"
+                    diagnostics["counters"]["fetch_succeeded"] = fetched_count
+                    diagnostics["stages"]["fetch"]["status"] = "succeeded" if fetched_count > 0 else "empty"
                     if fetched_count > 0:
                         logger.info(
                             "Reddit ingestion succeeded after failover",
@@ -403,18 +495,38 @@ def run_for_platform(platform: str, config: dict[str, Any], *, days_back: int) -
                 ingestor = adapter_class()
                 docs, stats = ingestor.run(config=config, days_back=days_back)
                 fetched_count = stats.docs_emitted
+                diagnostics["backend_used"] = fetch_backend
+                diagnostics["counters"]["fetch_succeeded"] = fetched_count
+                diagnostics["stages"]["fetch"]["status"] = "succeeded"
         else:
             adapter_class = get_adapter_class(platform)
             ingestor = adapter_class()
             docs, stats = ingestor.run(config=config, days_back=days_back)
             fetched_count = stats.docs_emitted
+            diagnostics["stages"]["fetch"]["status"] = "succeeded"
+            diagnostics["counters"]["fetch_succeeded"] = fetched_count
+
+        diagnostics["stages"]["normalize"]["status"] = "succeeded"
+        diagnostics["stages"]["normalize"]["count"] = len(docs)
+        diagnostics["counters"]["normalize_count"] = len(docs)
+
+        diagnostics["stages"]["insert"]["status"] = "running"
         inserted = _insert_documents(session, source_id, docs)
+        diagnostics["stages"]["insert"]["status"] = "succeeded"
+        diagnostics["stages"]["insert"]["inserted"] = inserted
+        diagnostics["counters"]["inserted_count"] = inserted
+        diagnostics["stages"]["dedupe"]["status"] = "succeeded"
+        diagnostics["stages"]["dedupe"]["skipped"] = max(len(docs) - inserted, 0)
+        diagnostics["counters"]["dedupe_skipped"] = max(len(docs) - inserted, 0)
+        diagnostics["stages"]["enrich_trigger"]["status"] = "not_triggered"
+        diagnostics["stages"]["enrich_trigger"]["reason"] = "Enrichment is run as a separate admin action."
 
         run_repo.complete_run(
             run_id=run_id,
             records_fetched=fetched_count,
             records_inserted=inserted,
             status="completed",
+            error_message=json.dumps(diagnostics, default=str),
         )
         logger.info(
             "%s refresh completed",
@@ -423,13 +535,20 @@ def run_for_platform(platform: str, config: dict[str, Any], *, days_back: int) -
         )
         return {"records_fetched": fetched_count, "records_inserted": inserted}
     except Exception as exc:
+        if diagnostics:
+            if diagnostics["first_failing_stage"] is None:
+                diagnostics["first_failing_stage"] = "insert" if diagnostics["stages"]["insert"]["status"] == "running" else "unknown"
+            if diagnostics["error_summary"] is None:
+                diagnostics["error_summary"] = f"{exc.__class__.__name__}: {exc}"
+            if diagnostics["stages"]["insert"]["status"] == "running":
+                _record_stage_failure(diagnostics, "insert", exc)
         if run_id is not None:
             run_repo.complete_run(
                 run_id=run_id,
-                records_fetched=0,
-                records_inserted=0,
+                records_fetched=fetched_count,
+                records_inserted=inserted,
                 status="failed",
-                error_message=str(exc),
+                error_message=json.dumps(diagnostics, default=str) if diagnostics else str(exc),
             )
         logger.exception("%s refresh failed", platform)
         raise

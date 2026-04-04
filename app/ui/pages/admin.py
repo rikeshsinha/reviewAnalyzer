@@ -6,6 +6,7 @@ import subprocess
 import sys
 from datetime import date, timedelta
 import os
+import json
 from pathlib import Path
 from typing import Any
 
@@ -96,6 +97,16 @@ def _run_command(module: str, env_overrides: dict[str, str] | None = None) -> tu
     )
     output = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
     return proc.returncode == 0, output.strip()
+
+
+def _parse_ingestion_diagnostics(error_message: str | None) -> dict[str, Any] | None:
+    if not error_message:
+        return None
+    try:
+        payload = json.loads(error_message)
+    except json.JSONDecodeError:
+        return None
+    return payload if isinstance(payload, dict) else None
 
 
 def _rebuild_insight_cache(filters: dict[str, Any]) -> tuple[bool, str]:
@@ -319,6 +330,61 @@ def render(filters: dict[str, Any]) -> None:
     ingestion_rows = _load_last_ingestion_runs()
     if ingestion_rows:
         st.dataframe(ingestion_rows, width="stretch")
+
+        st.markdown("#### Ingestion diagnostics")
+        for run in ingestion_rows:
+            diagnostics = _parse_ingestion_diagnostics(run.get("error_message"))
+            if not diagnostics:
+                continue
+
+            run_id = run.get("id")
+            backend_selected = diagnostics.get("backend_requested") or "n/a"
+            backend_used = diagnostics.get("backend_used") or "n/a"
+            first_failing_stage = diagnostics.get("first_failing_stage") or "-"
+            error_summary = diagnostics.get("error_summary") or "-"
+            fallback_activated = diagnostics.get("fallback_activated")
+            fallback_label = "yes" if fallback_activated else "no"
+            effective_config = diagnostics.get("effective_config", {})
+
+            with st.expander(f"Run #{run_id} diagnostics ({run.get('status', 'unknown')})"):
+                st.markdown(
+                    f"**Backend selected:** `{backend_selected}`  \n"
+                    f"**Backend used:** `{backend_used}`  \n"
+                    f"**Fallback activated:** `{fallback_label}`  \n"
+                    f"**First failing stage:** `{first_failing_stage}`  \n"
+                    f"**Error summary:** `{error_summary}`"
+                )
+
+                stages = diagnostics.get("stages", {})
+                stage_rows: list[dict[str, Any]] = []
+                for stage_name in ["fetch", "normalize", "dedupe", "insert", "enrich_trigger"]:
+                    stage_data = stages.get(stage_name, {})
+                    error_data = stage_data.get("error") or {}
+                    stage_rows.append(
+                        {
+                            "stage": stage_name,
+                            "status": stage_data.get("status", "unknown"),
+                            "count": stage_data.get("count"),
+                            "inserted": stage_data.get("inserted"),
+                            "dedupe_skipped": stage_data.get("skipped"),
+                            "error_class": error_data.get("class"),
+                            "error_message": error_data.get("message"),
+                        }
+                    )
+                st.dataframe(stage_rows, width="stretch")
+
+                st.caption("Effective config snapshot")
+                st.json(
+                    {
+                        "subreddits": effective_config.get("subreddits", []),
+                        "keywords": effective_config.get("keywords", []),
+                        "date_from": effective_config.get("date_from"),
+                        "date_to": effective_config.get("date_to"),
+                        "post_limit": effective_config.get("post_limit"),
+                        "days_back": effective_config.get("days_back"),
+                    },
+                    expanded=False,
+                )
     else:
         st.info("No ingestion runs yet. Run 'Refresh Reddit ingestion' to populate this table.")
 
