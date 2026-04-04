@@ -14,6 +14,7 @@ from app.jobs.refresh_reddit import (
     _run_public_json_ingestion,
     _run_rss_ingestion,
     _run_pushshift_ingestion,
+    _resolve_ingestion_window,
     _safe_ensure_dedupe_constraints,
     run_for_platform,
 )
@@ -285,6 +286,34 @@ def test_run_pushshift_ingestion_normalizes_and_dedupes(monkeypatch) -> None:
     assert calls == [{"subreddit": "android", "query": "battery"}, {"subreddit": "android", "query": "drain"}]
 
 
+def test_resolve_ingestion_window_uses_explicit_env_dates(monkeypatch) -> None:
+    monkeypatch.setenv("REDDIT_INGEST_DATE_FROM", "2026-03-01")
+    monkeypatch.setenv("REDDIT_INGEST_DATE_TO", "2026-03-07")
+
+    after_dt, before_dt = _resolve_ingestion_window(days_back=30)
+
+    assert after_dt.isoformat() == "2026-03-01T00:00:00+00:00"
+    assert before_dt.isoformat() == "2026-03-07T23:59:59.999999+00:00"
+
+
+def test_run_public_json_ingestion_uses_explicit_window(monkeypatch) -> None:
+    observed_window: dict[str, str] = {}
+
+    def _fake_public_json_search(**kwargs):
+        observed_window["after_iso"] = kwargs["after_iso"]
+        observed_window["before_iso"] = kwargs["before_iso"]
+        return []
+
+    monkeypatch.setattr("app.jobs.refresh_reddit.search_public_json_submissions", _fake_public_json_search)
+    monkeypatch.setenv("REDDIT_INGEST_DATE_FROM", "2026-03-01")
+    monkeypatch.setenv("REDDIT_INGEST_DATE_TO", "2026-03-07")
+
+    _run_public_json_ingestion({"subreddits": ["android"], "keywords": ["battery"]}, days_back=99)
+
+    assert observed_window["after_iso"] == "2026-03-01T00:00:00+00:00"
+    assert observed_window["before_iso"] == "2026-03-07T23:59:59.999999+00:00"
+
+
 def test_run_public_json_ingestion_continues_after_failed_pair(monkeypatch) -> None:
     calls: list[dict[str, str]] = []
 
@@ -346,7 +375,9 @@ def test_run_for_platform_uses_pushshift_backend_and_persists_reddit_payload(mon
 
     pushshift_calls: list[dict[str, object]] = []
 
-    def _fake_run_pushshift_ingestion(config: dict[str, object], *, days_back: int):
+    def _fake_run_pushshift_ingestion(
+        config: dict[str, object], *, days_back: int, ingestion_window: object | None = None
+    ):
         pushshift_calls.append({"config": config, "days_back": days_back})
         return docs, len(docs)
 
@@ -401,7 +432,9 @@ def test_run_for_platform_uses_public_json_backend(monkeypatch) -> None:
 
     public_json_calls: list[dict[str, object]] = []
 
-    def _fake_run_public_json_ingestion(config: dict[str, object], *, days_back: int):
+    def _fake_run_public_json_ingestion(
+        config: dict[str, object], *, days_back: int, ingestion_window: object | None = None
+    ):
         public_json_calls.append({"config": config, "days_back": days_back})
         return docs, len(docs)
 
@@ -453,12 +486,16 @@ def test_run_for_platform_falls_back_to_public_json_when_pushshift_fails(monkeyp
         }
     ]
 
-    def _fake_run_pushshift_ingestion(config: dict[str, object], *, days_back: int):
+    def _fake_run_pushshift_ingestion(
+        config: dict[str, object], *, days_back: int, ingestion_window: object | None = None
+    ):
         raise PushshiftError("Pushshift request failed")
 
     fallback_calls: list[dict[str, object]] = []
 
-    def _fake_run_public_json_ingestion(config: dict[str, object], *, days_back: int):
+    def _fake_run_public_json_ingestion(
+        config: dict[str, object], *, days_back: int, ingestion_window: object | None = None
+    ):
         fallback_calls.append({"config": config, "days_back": days_back})
         return fallback_docs, len(fallback_docs)
 
@@ -534,12 +571,12 @@ def test_run_for_platform_falls_back_to_rss_when_public_json_fails(monkeypatch) 
         }
     ]
 
-    def _fake_public_json(config: dict[str, object], *, days_back: int):
+    def _fake_public_json(config: dict[str, object], *, days_back: int, ingestion_window: object | None = None):
         raise PublicRedditError("public json blocked")
 
     rss_calls: list[dict[str, object]] = []
 
-    def _fake_rss(config: dict[str, object], *, days_back: int):
+    def _fake_rss(config: dict[str, object], *, days_back: int, ingestion_window: object | None = None):
         rss_calls.append({"config": config, "days_back": days_back})
         return fallback_docs, len(fallback_docs)
 
@@ -586,13 +623,13 @@ def test_run_for_platform_uses_full_no_key_failover_chain(monkeypatch) -> None:
         }
     ]
 
-    def _fake_pushshift(config: dict[str, object], *, days_back: int):
+    def _fake_pushshift(config: dict[str, object], *, days_back: int, ingestion_window: object | None = None):
         raise PushshiftError("pushshift host 403")
 
-    def _fake_public_json(config: dict[str, object], *, days_back: int):
+    def _fake_public_json(config: dict[str, object], *, days_back: int, ingestion_window: object | None = None):
         raise PublicRedditError("public json host 403")
 
-    def _fake_rss(config: dict[str, object], *, days_back: int):
+    def _fake_rss(config: dict[str, object], *, days_back: int, ingestion_window: object | None = None):
         return rss_docs, len(rss_docs)
 
     monkeypatch.setattr("app.jobs.refresh_reddit.SessionLocal", lambda: session)
@@ -613,13 +650,13 @@ def test_run_for_platform_uses_full_no_key_failover_chain(monkeypatch) -> None:
 def test_run_for_platform_marks_failed_when_all_failovers_return_zero_docs(monkeypatch) -> None:
     session = _build_session()
 
-    def _fake_pushshift(config: dict[str, object], *, days_back: int):
+    def _fake_pushshift(config: dict[str, object], *, days_back: int, ingestion_window: object | None = None):
         return [], 0
 
-    def _fake_public_json(config: dict[str, object], *, days_back: int):
+    def _fake_public_json(config: dict[str, object], *, days_back: int, ingestion_window: object | None = None):
         return [], 0
 
-    def _fake_rss(config: dict[str, object], *, days_back: int):
+    def _fake_rss(config: dict[str, object], *, days_back: int, ingestion_window: object | None = None):
         return [], 0
 
     monkeypatch.setattr("app.jobs.refresh_reddit.SessionLocal", lambda: session)
