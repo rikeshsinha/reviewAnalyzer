@@ -42,6 +42,10 @@ class IngestionSettings(BaseModel):
     public_reddit_page_size: int = Field(100, alias="PUBLIC_REDDIT_PAGE_SIZE", ge=1, le=100)
     public_reddit_max_pages: int = Field(5, alias="PUBLIC_REDDIT_MAX_PAGES", ge=1, le=1000)
     public_reddit_delay_seconds: float = Field(1.0, alias="PUBLIC_REDDIT_DELAY_SECONDS", ge=0, le=30)
+    public_reddit_include_recent_when_no_keyword_hits: bool = Field(
+        True,
+        alias="PUBLIC_REDDIT_INCLUDE_RECENT_WHEN_NO_KEYWORD_HITS",
+    )
 
 
 class EnrichmentSettings(CommonSettings):
@@ -72,6 +76,9 @@ def _build_env_values() -> dict[str, Any]:
         "PUBLIC_REDDIT_PAGE_SIZE": os.getenv("PUBLIC_REDDIT_PAGE_SIZE"),
         "PUBLIC_REDDIT_MAX_PAGES": os.getenv("PUBLIC_REDDIT_MAX_PAGES"),
         "PUBLIC_REDDIT_DELAY_SECONDS": os.getenv("PUBLIC_REDDIT_DELAY_SECONDS"),
+        "PUBLIC_REDDIT_INCLUDE_RECENT_WHEN_NO_KEYWORD_HITS": os.getenv(
+            "PUBLIC_REDDIT_INCLUDE_RECENT_WHEN_NO_KEYWORD_HITS"
+        ),
     }
     cleaned_values: dict[str, Any] = {}
     for key, value in raw_values.items():

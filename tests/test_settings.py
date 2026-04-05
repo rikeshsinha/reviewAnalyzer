@@ -29,6 +29,7 @@ def _reset_settings(monkeypatch):
         "PUBLIC_REDDIT_PAGE_SIZE",
         "PUBLIC_REDDIT_MAX_PAGES",
         "PUBLIC_REDDIT_DELAY_SECONDS",
+        "PUBLIC_REDDIT_INCLUDE_RECENT_WHEN_NO_KEYWORD_HITS",
     ):
         monkeypatch.delenv(env_name, raising=False)
     _clear_settings_caches()
@@ -52,6 +53,7 @@ def test_ingestion_settings_allow_missing_public_reddit_vars_with_defaults() -> 
     assert settings.public_reddit_user_agent == "reviewAnalyzer/0.1 (public-json-ingestion)"
     assert settings.public_reddit_page_size == 100
     assert settings.public_reddit_max_pages == 5
+    assert settings.public_reddit_include_recent_when_no_keyword_hits is True
 
 
 def test_blank_reddit_user_agent_uses_default(monkeypatch) -> None:

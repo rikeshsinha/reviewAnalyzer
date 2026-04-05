@@ -385,6 +385,20 @@ def render(filters: dict[str, Any]) -> None:
                     },
                     expanded=False,
                 )
+
+                fetch_diagnostics = diagnostics.get("fetch_diagnostics", {})
+                if isinstance(fetch_diagnostics, dict):
+                    st.caption("Fetch diagnostics")
+                    st.json(fetch_diagnostics, expanded=False)
+
+                fetch_status = stages.get("fetch", {}).get("status")
+                has_fetch_error = bool(stages.get("fetch", {}).get("error"))
+                if fetch_status == "empty" and not has_fetch_error:
+                    st.warning(
+                        "Fetch returned no documents without a hard error. "
+                        "Recommendations: widen the date range, reduce keyword strictness, "
+                        "or enable recent-post fallback mode."
+                    )
     else:
         st.info("No ingestion runs yet. Run 'Refresh Reddit ingestion' to populate this table.")
 
