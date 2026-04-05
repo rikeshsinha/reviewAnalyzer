@@ -17,6 +17,7 @@ from app.db.session import SessionLocal
 from app.ingestion.normalizers import normalize_pushshift_submission
 from app.ingestion.public_reddit_client import PublicRedditError
 from app.ingestion.pushshift_client import PushshiftError, search_submissions
+from app.ingestion.public_reddit_client import fetch_subreddit_new
 from app.ingestion.public_reddit_client import search_submissions as search_public_json_submissions
 from app.ingestion.reddit_rss_client import search_submissions as search_rss_submissions
 from app.ingestion.registry import get_adapter_class
@@ -55,6 +56,14 @@ def _build_ingestion_diagnostics(
             "dedupe": {"status": "pending", "skipped": 0},
             "insert": {"status": "pending", "inserted": 0},
             "enrich_trigger": {"status": "pending"},
+        },
+        "fetch_diagnostics": {
+            "queries_attempted": 0,
+            "queries_with_hits": 0,
+            "subreddits_with_hits": 0,
+            "search_hits_total": 0,
+            "new_fallback_hits_total": 0,
+            "failed_or_empty_queries_top5": [],
         },
         "counters": {
             "fetch_started": 0,
@@ -247,6 +256,7 @@ def _run_public_json_ingestion(
     days_back: int,
     ingestion_window: tuple[datetime, datetime] | None = None,
     settings: IngestionSettings | None = None,
+    fetch_diagnostics: dict[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
     subreddits = [item for item in config.get("subreddits", []) if isinstance(item, str) and item.strip()]
     keywords = [item for item in config.get("keywords", []) if isinstance(item, str) and item.strip()]
@@ -261,13 +271,27 @@ def _run_public_json_ingestion(
     delay_seconds = active_settings.public_reddit_delay_seconds
     base_url = active_settings.public_reddit_base_url
     user_agent = active_settings.public_reddit_user_agent or active_settings.reddit_user_agent
+    include_recent_when_no_keyword_hits = active_settings.public_reddit_include_recent_when_no_keyword_hits
 
     seen_ids: set[str] = set()
     docs: list[dict[str, Any]] = []
     query_terms = keywords or [""]
+    empty_or_failed_queries: list[str] = []
+    if fetch_diagnostics is not None:
+        fetch_diagnostics.setdefault("queries_attempted", 0)
+        fetch_diagnostics.setdefault("queries_with_hits", 0)
+        fetch_diagnostics.setdefault("subreddits_with_hits", 0)
+        fetch_diagnostics.setdefault("search_hits_total", 0)
+        fetch_diagnostics.setdefault("new_fallback_hits_total", 0)
+        fetch_diagnostics.setdefault("failed_or_empty_queries_top5", [])
 
     for subreddit in subreddits:
+        subreddit_has_hits = False
+        subreddit_search_hits = 0
+        subreddit_query_terms = [query for query in query_terms if isinstance(query, str)]
         for query in query_terms:
+            if fetch_diagnostics is not None:
+                fetch_diagnostics["queries_attempted"] = int(fetch_diagnostics.get("queries_attempted", 0)) + 1
             try:
                 submissions = search_public_json_submissions(
                     subreddit=subreddit,
@@ -285,7 +309,15 @@ def _run_public_json_ingestion(
                     "Skipping failed public_json pair and continuing batch",
                     extra={"subreddit": subreddit, "query": query, "error": str(exc)},
                 )
+                empty_or_failed_queries.append(f"r/{subreddit} :: {query or '(blank)'} (error: {exc.__class__.__name__})")
                 continue
+            if submissions:
+                if fetch_diagnostics is not None:
+                    fetch_diagnostics["queries_with_hits"] = int(fetch_diagnostics.get("queries_with_hits", 0)) + 1
+                    fetch_diagnostics["search_hits_total"] = int(fetch_diagnostics.get("search_hits_total", 0)) + len(
+                        submissions
+                    )
+                subreddit_search_hits += len(submissions)
             for raw_submission in submissions:
                 normalized = normalize_pushshift_submission(raw_submission)
                 external_id = normalized.get("external_id")
@@ -294,6 +326,53 @@ def _run_public_json_ingestion(
                 if isinstance(external_id, str):
                     seen_ids.add(external_id)
                 docs.append(normalized)
+                subreddit_has_hits = True
+            if not submissions:
+                empty_or_failed_queries.append(f"r/{subreddit} :: {query or '(blank)'}")
+
+        if subreddit_search_hits == 0:
+            fallback_submissions = fetch_subreddit_new(
+                subreddit=subreddit,
+                after_iso=after_iso,
+                before_iso=before_iso,
+                page_size=page_size,
+                max_pages=max_pages,
+                base_url=base_url,
+                user_agent=user_agent,
+                request_delay_seconds=delay_seconds,
+            )
+            lowered_keywords = [term.casefold() for term in subreddit_query_terms if term.strip()]
+
+            def _matches_keywords(submission: dict[str, Any]) -> bool:
+                if not lowered_keywords:
+                    return True
+                haystack = f"{submission.get('title', '')}\n{submission.get('selftext', '')}".casefold()
+                return any(term in haystack for term in lowered_keywords)
+
+            fallback_filtered = [row for row in fallback_submissions if _matches_keywords(row)]
+            if not fallback_filtered and lowered_keywords and include_recent_when_no_keyword_hits:
+                fallback_filtered = fallback_submissions
+
+            if fallback_filtered and fetch_diagnostics is not None:
+                fetch_diagnostics["new_fallback_hits_total"] = int(
+                    fetch_diagnostics.get("new_fallback_hits_total", 0)
+                ) + len(fallback_filtered)
+
+            for raw_submission in fallback_filtered:
+                normalized = normalize_pushshift_submission(raw_submission)
+                external_id = normalized.get("external_id")
+                if isinstance(external_id, str) and external_id in seen_ids:
+                    continue
+                if isinstance(external_id, str):
+                    seen_ids.add(external_id)
+                docs.append(normalized)
+                subreddit_has_hits = True
+
+        if subreddit_has_hits and fetch_diagnostics is not None:
+            fetch_diagnostics["subreddits_with_hits"] = int(fetch_diagnostics.get("subreddits_with_hits", 0)) + 1
+
+    if fetch_diagnostics is not None:
+        fetch_diagnostics["failed_or_empty_queries_top5"] = empty_or_failed_queries[:5]
 
     return docs, len(docs)
 
@@ -399,11 +478,19 @@ def run_for_platform(platform: str, config: dict[str, Any], *, days_back: int) -
                 for backend_name, backend_runner in fallback_chain:
                     try:
                         diagnostics["fallback_chain"].append({"backend": backend_name, "status": "running"})
-                        candidate_docs, candidate_count = backend_runner(
-                            config,
-                            days_back=days_back,
-                            ingestion_window=ingestion_window,
-                        )
+                        if backend_name == "public_json":
+                            candidate_docs, candidate_count = backend_runner(
+                                config,
+                                days_back=days_back,
+                                ingestion_window=ingestion_window,
+                                fetch_diagnostics=diagnostics.get("fetch_diagnostics", {}),
+                            )
+                        else:
+                            candidate_docs, candidate_count = backend_runner(
+                                config,
+                                days_back=days_back,
+                                ingestion_window=ingestion_window,
+                            )
                     except (PushshiftError, PublicRedditError, requests.RequestException) as exc:
                         diagnostics["counters"]["fetch_failed"] += 1
                         diagnostics["fallback_chain"][-1]["status"] = "failed"
@@ -459,6 +546,7 @@ def run_for_platform(platform: str, config: dict[str, Any], *, days_back: int) -
                         config,
                         days_back=days_back,
                         ingestion_window=ingestion_window,
+                        fetch_diagnostics=diagnostics.get("fetch_diagnostics", {}),
                     )
                     diagnostics["backend_used"] = "public_json"
                     diagnostics["counters"]["fetch_succeeded"] = fetched_count

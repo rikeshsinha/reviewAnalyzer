@@ -305,6 +305,7 @@ def test_run_public_json_ingestion_uses_explicit_window(monkeypatch) -> None:
         return []
 
     monkeypatch.setattr("app.jobs.refresh_reddit.search_public_json_submissions", _fake_public_json_search)
+    monkeypatch.setattr("app.jobs.refresh_reddit.fetch_subreddit_new", lambda **kwargs: [])
     monkeypatch.setenv("REDDIT_INGEST_DATE_FROM", "2026-03-01")
     monkeypatch.setenv("REDDIT_INGEST_DATE_TO", "2026-03-07")
 
@@ -347,6 +348,92 @@ def test_run_public_json_ingestion_continues_after_failed_pair(monkeypatch) -> N
     assert fetched_count == 1
     assert len(docs) == 1
     assert docs[0]["external_id"] == "ok1"
+
+
+def test_run_public_json_ingestion_falls_back_to_new_when_search_empty(monkeypatch) -> None:
+    def _fake_public_json_search(**kwargs):
+        return []
+
+    def _fake_fetch_subreddit_new(**kwargs):
+        return [
+            {
+                "id": "new1",
+                "title": "Samsung Health sleep tracking",
+                "selftext": "sleep details",
+                "subreddit": kwargs["subreddit"],
+                "author": "alice",
+                "created_utc": 1_710_000_000,
+                "permalink": "/r/android/comments/new1/test/",
+            }
+        ]
+
+    monkeypatch.setattr("app.jobs.refresh_reddit.search_public_json_submissions", _fake_public_json_search)
+    monkeypatch.setattr("app.jobs.refresh_reddit.fetch_subreddit_new", _fake_fetch_subreddit_new)
+
+    diagnostics: dict[str, object] = {}
+    docs, fetched_count = _run_public_json_ingestion(
+        {"subreddits": ["android"], "keywords": ["sleep"], "post_limit": 10},
+        days_back=7,
+        fetch_diagnostics=diagnostics,
+    )
+
+    assert fetched_count == 1
+    assert docs[0]["external_id"] == "new1"
+    assert diagnostics["search_hits_total"] == 0
+    assert diagnostics["new_fallback_hits_total"] == 1
+
+
+def test_run_public_json_ingestion_fallback_keyword_filter_is_case_insensitive(monkeypatch) -> None:
+    monkeypatch.setattr("app.jobs.refresh_reddit.search_public_json_submissions", lambda **kwargs: [])
+    monkeypatch.setattr(
+        "app.jobs.refresh_reddit.fetch_subreddit_new",
+        lambda **kwargs: [
+            {
+                "id": "new2",
+                "title": "SLEEP report",
+                "selftext": "tracking details",
+                "subreddit": kwargs["subreddit"],
+                "author": "alice",
+                "created_utc": 1_710_000_000,
+                "permalink": "/r/android/comments/new2/test/",
+            }
+        ],
+    )
+
+    docs, fetched_count = _run_public_json_ingestion(
+        {"subreddits": ["android"], "keywords": ["sleep"], "post_limit": 10},
+        days_back=7,
+    )
+
+    assert fetched_count == 1
+    assert docs[0]["external_id"] == "new2"
+
+
+def test_run_public_json_ingestion_returns_recent_when_keyword_filter_empty_if_enabled(monkeypatch) -> None:
+    monkeypatch.setattr("app.jobs.refresh_reddit.search_public_json_submissions", lambda **kwargs: [])
+    monkeypatch.setattr(
+        "app.jobs.refresh_reddit.fetch_subreddit_new",
+        lambda **kwargs: [
+            {
+                "id": "new3",
+                "title": "general update",
+                "selftext": "no keyword",
+                "subreddit": kwargs["subreddit"],
+                "author": "alice",
+                "created_utc": 1_710_000_000,
+                "permalink": "/r/android/comments/new3/test/",
+            }
+        ],
+    )
+    monkeypatch.setenv("PUBLIC_REDDIT_INCLUDE_RECENT_WHEN_NO_KEYWORD_HITS", "true")
+
+    docs, fetched_count = _run_public_json_ingestion(
+        {"subreddits": ["android"], "keywords": ["sleep"], "post_limit": 10},
+        days_back=7,
+    )
+
+    assert fetched_count == 1
+    assert docs[0]["external_id"] == "new3"
 
 
 def test_run_for_platform_uses_pushshift_backend_and_persists_reddit_payload(monkeypatch) -> None:
@@ -445,7 +532,11 @@ def test_run_for_platform_uses_public_json_backend(monkeypatch) -> None:
     public_json_calls: list[dict[str, object]] = []
 
     def _fake_run_public_json_ingestion(
-        config: dict[str, object], *, days_back: int, ingestion_window: object | None = None
+        config: dict[str, object],
+        *,
+        days_back: int,
+        ingestion_window: object | None = None,
+        fetch_diagnostics: dict[str, object] | None = None,
     ):
         public_json_calls.append({"config": config, "days_back": days_back})
         return docs, len(docs)
@@ -506,7 +597,11 @@ def test_run_for_platform_falls_back_to_public_json_when_pushshift_fails(monkeyp
     fallback_calls: list[dict[str, object]] = []
 
     def _fake_run_public_json_ingestion(
-        config: dict[str, object], *, days_back: int, ingestion_window: object | None = None
+        config: dict[str, object],
+        *,
+        days_back: int,
+        ingestion_window: object | None = None,
+        fetch_diagnostics: dict[str, object] | None = None,
     ):
         fallback_calls.append({"config": config, "days_back": days_back})
         return fallback_docs, len(fallback_docs)
@@ -534,6 +629,41 @@ def test_run_for_platform_falls_back_to_public_json_when_pushshift_fails(monkeyp
     ]
     assert diagnostics["fallback_activated"] is True
     assert diagnostics["backend_used"] == "public_json"
+
+
+def test_run_for_platform_public_json_persists_fetch_diagnostics(monkeypatch) -> None:
+    session = _build_session()
+    monkeypatch.setattr("app.jobs.refresh_reddit.SessionLocal", lambda: session)
+    monkeypatch.setenv("REDDIT_FETCH_BACKEND", "public_json")
+    monkeypatch.setattr("app.jobs.refresh_reddit.search_public_json_submissions", lambda **kwargs: [])
+    monkeypatch.setattr(
+        "app.jobs.refresh_reddit.fetch_subreddit_new",
+        lambda **kwargs: [
+            {
+                "id": "diag1",
+                "title": "sleep note",
+                "selftext": "sleep details",
+                "subreddit": kwargs["subreddit"],
+                "author": "alice",
+                "created_utc": 1_710_000_000,
+                "permalink": "/r/android/comments/diag1/test/",
+            }
+        ],
+    )
+
+    stats = run_for_platform(
+        "reddit",
+        {"subreddits": ["android"], "keywords": ["sleep"], "post_limit": 10},
+        days_back=7,
+    )
+    run_row = session.execute(text("SELECT error_message FROM ingestion_runs ORDER BY id DESC LIMIT 1")).first()
+    assert run_row is not None
+    diagnostics = json.loads(run_row.error_message)
+
+    assert stats == {"records_fetched": 1, "records_inserted": 1}
+    assert diagnostics["fetch_diagnostics"]["queries_attempted"] == 1
+    assert diagnostics["fetch_diagnostics"]["search_hits_total"] == 0
+    assert diagnostics["fetch_diagnostics"]["new_fallback_hits_total"] == 1
 
 
 def test_run_rss_ingestion_returns_normalized_docs(monkeypatch) -> None:
@@ -588,7 +718,13 @@ def test_run_for_platform_falls_back_to_rss_when_public_json_fails(monkeypatch) 
         }
     ]
 
-    def _fake_public_json(config: dict[str, object], *, days_back: int, ingestion_window: object | None = None):
+    def _fake_public_json(
+        config: dict[str, object],
+        *,
+        days_back: int,
+        ingestion_window: object | None = None,
+        fetch_diagnostics: dict[str, object] | None = None,
+    ):
         raise PublicRedditError("public json blocked")
 
     rss_calls: list[dict[str, object]] = []
@@ -643,7 +779,13 @@ def test_run_for_platform_uses_full_no_key_failover_chain(monkeypatch) -> None:
     def _fake_pushshift(config: dict[str, object], *, days_back: int, ingestion_window: object | None = None):
         raise PushshiftError("pushshift host 403")
 
-    def _fake_public_json(config: dict[str, object], *, days_back: int, ingestion_window: object | None = None):
+    def _fake_public_json(
+        config: dict[str, object],
+        *,
+        days_back: int,
+        ingestion_window: object | None = None,
+        fetch_diagnostics: dict[str, object] | None = None,
+    ):
         raise PublicRedditError("public json host 403")
 
     def _fake_rss(config: dict[str, object], *, days_back: int, ingestion_window: object | None = None):
@@ -670,7 +812,13 @@ def test_run_for_platform_marks_failed_when_all_failovers_return_zero_docs(monke
     def _fake_pushshift(config: dict[str, object], *, days_back: int, ingestion_window: object | None = None):
         return [], 0
 
-    def _fake_public_json(config: dict[str, object], *, days_back: int, ingestion_window: object | None = None):
+    def _fake_public_json(
+        config: dict[str, object],
+        *,
+        days_back: int,
+        ingestion_window: object | None = None,
+        fetch_diagnostics: dict[str, object] | None = None,
+    ):
         return [], 0
 
     def _fake_rss(config: dict[str, object], *, days_back: int, ingestion_window: object | None = None):
