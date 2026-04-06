@@ -55,6 +55,19 @@ def test_normalize_web_review_article_filters_non_editorial_pages() -> None:
     assert normalize_web_review_article(raw, min_content_chars=500) is None
 
 
+def test_normalize_web_review_article_keeps_editorial_review_pages() -> None:
+    raw = {
+        "url": "https://example.com/reviews/editorial-roundup-2026",
+        "title": "Editorial roundup",
+        "content": "Strong editorial review coverage. " * 30,
+    }
+
+    normalized = normalize_web_review_article(raw, min_content_chars=500)
+
+    assert normalized is not None
+    assert normalized["url"] == raw["url"]
+
+
 def test_normalize_web_review_article_filters_short_content() -> None:
     raw = {
         "url": "https://example.com/reviews/quick-look",
@@ -63,3 +76,19 @@ def test_normalize_web_review_article_filters_short_content() -> None:
     }
 
     assert normalize_web_review_article(raw, min_content_chars=500) is None
+
+
+def test_normalize_web_review_article_enforces_500_char_minimum() -> None:
+    nearly_long_enough = {
+        "url": "https://example.com/reviews/almost-long-enough",
+        "title": "Almost long enough",
+        "content": "a" * 499,
+    }
+    long_enough = {
+        "url": "https://example.com/reviews/long-enough",
+        "title": "Long enough",
+        "content": "a" * 500,
+    }
+
+    assert normalize_web_review_article(nearly_long_enough, min_content_chars=500) is None
+    assert normalize_web_review_article(long_enough, min_content_chars=500) is not None

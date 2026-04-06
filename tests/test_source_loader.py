@@ -71,13 +71,17 @@ platforms:
     enabled: false
     apps: []
     keywords: []
+  web_reviews:
+    enabled: true
+    sites: ["example.com"]
+    keywords: ["watch"]
 """.strip(),
         encoding="utf-8",
     )
 
     enabled = get_enabled_platform_configs(config_path)
 
-    assert [config.platform for config in enabled] == ["reddit"]
+    assert [config.platform for config in enabled] == ["reddit", "web_reviews"]
 
 
 def test_load_source_config_rejects_enabled_reddit_without_communities(tmp_path: Path) -> None:

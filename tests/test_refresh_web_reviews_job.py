@@ -31,6 +31,35 @@ def test_resolve_ingestion_window_accepts_explicit_dates() -> None:
     assert end.isoformat() == "2026-03-03T23:59:59.999999+00:00"
 
 
+def test_canonicalize_url_normalizes_scheme_host_port_and_trailing_slash() -> None:
+    assert refresh_web_reviews._canonicalize_url("HTTPS://WWW.Example.COM/reviews/watch-8/?utm=campaign") == (
+        "https://www.example.com/reviews/watch-8"
+    )
+    assert refresh_web_reviews._canonicalize_url("https://example.com:443/reviews/watch-8/") == (
+        "https://example.com/reviews/watch-8"
+    )
+    assert refresh_web_reviews._canonicalize_url("http://example.com:8080/reviews/watch-8/") == (
+        "http://example.com:8080/reviews/watch-8"
+    )
+
+
+def test_canonical_dedupe_key_matches_across_tracking_variants() -> None:
+    base_doc = {
+        "url": "https://example.com/reviews/watch-8-review",
+        "title": "Galaxy Watch 8 Review",
+        "content": "Battery life impressed us." * 30,
+    }
+    tracking_doc = {
+        "url": "https://example.com/reviews/watch-8-review/?utm_source=newsletter&utm_medium=email",
+        "title": "Galaxy Watch 8 Review",
+        "content": "Battery life impressed us." * 30,
+    }
+
+    assert refresh_web_reviews._canonical_web_dedupe_key(base_doc) == refresh_web_reviews._canonical_web_dedupe_key(
+        tracking_doc
+    )
+
+
 def test_run_for_web_reviews_persists_docs_and_run_stats(monkeypatch) -> None:
     session = _build_session()
     monkeypatch.setattr(refresh_web_reviews, "SessionLocal", lambda: session)
@@ -99,6 +128,65 @@ def test_run_for_web_reviews_persists_docs_and_run_stats(monkeypatch) -> None:
     assert run_row.status == "completed"
     assert run_row.records_fetched == 2
     assert run_row.records_inserted == 1
+
+
+def test_run_for_web_reviews_is_idempotent_for_duplicate_content(monkeypatch) -> None:
+    session = _build_session()
+    monkeypatch.setattr(refresh_web_reviews, "SessionLocal", lambda: session)
+
+    class _FakeClient:
+        def discover_candidate_article_urls(
+            self,
+            *,
+            homepage_url: str,
+            category_urls: list[str] | None = None,
+            keywords: list[str] | None = None,
+            prioritize_keywords: bool = False,
+        ) -> list[str]:
+            del category_urls
+            del keywords
+            del prioritize_keywords
+            return [
+                f"{homepage_url}/reviews/galaxy-watch-8-review",
+                f"{homepage_url}/reviews/galaxy-watch-8-review/?utm=campaign",
+            ]
+
+        def fetch_articles(self, article_urls: list[str]) -> dict[str, str]:
+            return {
+                article_urls[0]: (
+                    "<html><head><title>Galaxy Watch 8 Review</title>"
+                    "<meta property='article:published_time' content='2026-03-10T12:00:00Z'/></head>"
+                    "<body><article><p>" + ("Great battery life. " * 80) + "</p></article></body></html>"
+                ),
+                article_urls[1]: (
+                    "<html><head><title>Galaxy Watch 8 Review</title>"
+                    "<meta property='article:published_time' content='2026-03-10T12:00:00Z'/></head>"
+                    "<body><article><p>" + ("Great battery life. " * 80) + "</p></article></body></html>"
+                ),
+            }
+
+    monkeypatch.setattr(refresh_web_reviews, "WebReviewsClient", lambda: _FakeClient())
+    config = {"sites": ["example.com"], "max_pages_per_site": 10, "min_content_chars": 500}
+
+    first_run = refresh_web_reviews.run_for_web_reviews(
+        config,
+        days_back=365,
+        date_from="2026-03-01",
+        date_to="2026-03-20",
+    )
+    second_run = refresh_web_reviews.run_for_web_reviews(
+        config,
+        days_back=365,
+        date_from="2026-03-01",
+        date_to="2026-03-20",
+    )
+
+    assert first_run["records_inserted"] == 1
+    assert second_run["records_inserted"] == 0
+
+    dedupe_keys = session.execute(text("SELECT dedupe_key FROM documents")).scalars().all()
+    assert len(dedupe_keys) == 1
+    assert dedupe_keys[0].startswith("web_reviews:canonical:")
 
 
 def test_run_for_web_reviews_honors_explicit_date_range(monkeypatch) -> None:
