@@ -20,6 +20,7 @@ platforms:
     keywords: []
   web_reviews:
     enabled: false
+    days_back: 30
     sites:
       [
         "trustpilot.com",

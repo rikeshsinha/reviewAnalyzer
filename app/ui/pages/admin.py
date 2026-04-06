@@ -84,12 +84,19 @@ def _load_last_enrichment_runs() -> list[dict[str, Any]]:
         session.close()
 
 
-def _run_command(module: str, env_overrides: dict[str, str] | None = None) -> tuple[bool, str]:
+def _run_command(
+    module: str,
+    env_overrides: dict[str, str] | None = None,
+    args: list[str] | None = None,
+) -> tuple[bool, str]:
     env = os.environ.copy()
     if env_overrides:
         env.update(env_overrides)
+    command = [sys.executable, "-m", module]
+    if args:
+        command.extend(args)
     proc = subprocess.run(
-        [sys.executable, "-m", module],
+        command,
         capture_output=True,
         text=True,
         check=False,
@@ -458,12 +465,16 @@ def render(filters: dict[str, Any]) -> None:
             if invalid_web_date_range or web_ingestion_date_from is None or web_ingestion_date_to is None:
                 st.error("Please select a valid web ingestion date range before running refresh.")
                 st.stop()
-            env_overrides = {
-                "WEB_REVIEWS_INGEST_DATE_FROM": web_ingestion_date_from.isoformat(),
-                "WEB_REVIEWS_INGEST_DATE_TO": web_ingestion_date_to.isoformat(),
-            }
             with st.spinner("Running web review ingestion job..."):
-                ok, logs = _run_command("app.jobs.refresh_web_reviews", env_overrides=env_overrides)
+                ok, logs = _run_command(
+                    "app.jobs.refresh_web_reviews",
+                    args=[
+                        "--date-from",
+                        web_ingestion_date_from.isoformat(),
+                        "--date-to",
+                        web_ingestion_date_to.isoformat(),
+                    ],
+                )
             (st.success if ok else st.error)("Refresh completed." if ok else "Refresh failed.")
             st.code(logs or "No output")
 
