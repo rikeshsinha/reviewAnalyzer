@@ -67,6 +67,28 @@ def test_discovery_respects_robots_and_finds_candidates(monkeypatch) -> None:
     assert discovered == [article_allowed]
 
 
+def test_fetch_articles_respects_robots_rules(monkeypatch, caplog) -> None:
+    homepage = "https://example.com"
+    disallowed_article = "https://example.com/reviews/private"
+
+    response_map = {
+        homepage: _FakeResponse(200, ""),
+        disallowed_article: _FakeResponse(200, "<html><body>Should not be fetched</body></html>"),
+    }
+    monkeypatch.setattr("requests.Session", lambda: _FakeSession(response_map))
+    monkeypatch.setattr(
+        "app.ingestion.web_reviews_client.urllib.robotparser.RobotFileParser",
+        lambda: _FakeRobotParser({homepage}),
+    )
+
+    client = WebReviewsClient(request_delay_seconds=0)
+    with caplog.at_level("WARNING"):
+        fetched = client.fetch_articles([disallowed_article])
+
+    assert fetched == {}
+    assert any("Skipping disallowed URL by robots.txt" in message for message in caplog.messages)
+
+
 def test_blocked_pages_warn_and_are_skipped(monkeypatch, caplog) -> None:
     homepage = "https://example.com"
     article = "https://example.com/reviews/blocked-article"
@@ -91,6 +113,29 @@ def test_blocked_pages_warn_and_are_skipped(monkeypatch, caplog) -> None:
         html_by_url = client.fetch_articles(discovered)
 
     assert html_by_url == {}
+    assert any("Skipping blocked URL" in message for message in caplog.messages)
+
+
+def test_discovery_continues_after_blocked_homepage(monkeypatch, caplog) -> None:
+    homepage = "https://example.com"
+    category = "https://example.com/reviews"
+    article = "https://example.com/reviews/good-article"
+
+    response_map = {
+        homepage: _FakeResponse(403, "forbidden"),
+        category: _FakeResponse(200, f'<a href="{article}">Great review</a>'),
+    }
+    monkeypatch.setattr("requests.Session", lambda: _FakeSession(response_map))
+    monkeypatch.setattr(
+        "app.ingestion.web_reviews_client.urllib.robotparser.RobotFileParser",
+        lambda: _FakeRobotParser({homepage, category, article}),
+    )
+
+    client = WebReviewsClient(request_delay_seconds=0)
+    with caplog.at_level("WARNING"):
+        discovered = client.discover_candidate_article_urls(homepage_url=homepage, category_urls=[category])
+
+    assert discovered == [article]
     assert any("Skipping blocked URL" in message for message in caplog.messages)
 
 

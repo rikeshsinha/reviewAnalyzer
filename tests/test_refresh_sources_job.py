@@ -25,6 +25,12 @@ def test_refresh_sources_runs_enabled_platforms(monkeypatch) -> None:
                 days_back=7,
                 config={"apps": ["com.test.app"], "keywords": ["battery"]},
             ),
+            PlatformSourceConfig(
+                platform="web_reviews",
+                enabled=True,
+                days_back=14,
+                config={"sites": ["example.com"], "keywords": ["review"]},
+            ),
         ],
     )
 
@@ -39,6 +45,7 @@ def test_refresh_sources_runs_enabled_platforms(monkeypatch) -> None:
     assert calls == [
         ("reddit", {"subreddits": ["android"], "keywords": ["watch"]}, 30),
         ("google_play", {"apps": ["com.test.app"], "keywords": ["battery"]}, 7),
+        ("web_reviews", {"sites": ["example.com"], "keywords": ["review"]}, 14),
     ]
 
 
