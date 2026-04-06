@@ -44,7 +44,7 @@ def render(filters: dict[str, Any]) -> None:
 
     if st.button("Ask", type="primary"):
         if not query.strip():
-            st.warning("Please enter a question to run retrieval + answer generation.")
+            st.info("Enter a question or keyword, or apply filters to browse recent evidence.")
             return
 
         try:
