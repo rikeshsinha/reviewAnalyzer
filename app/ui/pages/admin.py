@@ -16,6 +16,8 @@ from sqlalchemy import text
 from app.config.source_loader import (
     BASE_SOURCE_CONFIG_PATH,
     RUNTIME_SOURCE_CONFIG_PATH,
+    SourceConfigError,
+    get_enabled_platform_configs,
 )
 from app.db.session import SessionLocal
 from app.services.analysis_service import AnalysisService
@@ -304,6 +306,23 @@ def _set_admin_config_notice(level: str, message: str) -> None:
     st.session_state.admin_config_notice_message = message
 
 
+def _sync_admin_form_inputs_from_drafts() -> None:
+    if not st.session_state.get("admin_sync_widget_values", False):
+        return
+    st.session_state["admin_communities_input"] = st.session_state.get("admin_communities_draft", "")
+    st.session_state["admin_keywords_input"] = st.session_state.get("admin_keywords_draft", "")
+    st.session_state["admin_web_sites_input"] = st.session_state.get("admin_web_sites_draft", "")
+    st.session_state["admin_web_keywords_input"] = st.session_state.get("admin_web_keywords_draft", "")
+    st.session_state["admin_web_max_pages_input"] = int(st.session_state.get("admin_web_max_pages_draft", 50))
+    st.session_state["admin_web_min_chars_input"] = int(st.session_state.get("admin_web_min_chars_draft", 500))
+    st.session_state["admin_sync_widget_values"] = False
+
+
+def _build_refresh_sources_env(selected_sources: list[str]) -> dict[str, str]:
+    normalized = [item.strip() for item in selected_sources if item.strip()]
+    return {"INGESTION_PLATFORMS": ",".join(normalized)}
+
+
 def _save_runtime_config_callback() -> None:
     communities_text = st.session_state.get("admin_communities_input", st.session_state.get("admin_communities_draft", ""))
     keywords_text = st.session_state.get("admin_keywords_input", st.session_state.get("admin_keywords_draft", ""))
@@ -355,6 +374,7 @@ def _save_runtime_config_callback() -> None:
         st.session_state.admin_web_keywords_draft = "\n".join(web_keywords)
         st.session_state.admin_web_max_pages_draft = web_max_pages_per_site
         st.session_state.admin_web_min_chars_draft = web_min_content_chars
+        st.session_state.admin_sync_widget_values = True
         _set_admin_config_notice(
             "success",
             f"Saved runtime config to `{RUNTIME_SOURCE_CONFIG_PATH}`.",
@@ -381,6 +401,7 @@ def _reset_to_defaults_callback() -> None:
     st.session_state.admin_web_keywords_draft = "\n".join(default_web_keywords)
     st.session_state.admin_web_max_pages_draft = default_web_max_pages
     st.session_state.admin_web_min_chars_draft = default_web_min_chars
+    st.session_state.admin_sync_widget_values = True
 
     try:
         _write_runtime_source_config(
@@ -483,6 +504,34 @@ def render(filters: dict[str, Any]) -> None:
             with st.spinner("Running enrichment job..."):
                 ok, logs = _run_command("app.jobs.enrich_new_docs")
             (st.success if ok else st.error)("Enrichment completed." if ok else "Enrichment failed.")
+            st.code(logs or "No output")
+
+    st.markdown("#### Combined ingestion refresh")
+    available_sources: list[str] = []
+    try:
+        available_sources = [cfg.platform for cfg in get_enabled_platform_configs()]
+    except SourceConfigError as exc:
+        st.error(f"Unable to load enabled sources: {exc}")
+    selected_sources = st.multiselect(
+        "Sources to refresh",
+        options=available_sources,
+        default=available_sources,
+        help="Only selected enabled sources will run (passed via INGESTION_PLATFORMS).",
+    )
+    if st.button("Refresh selected sources"):
+        if not selected_sources:
+            st.error("Please select at least one source to refresh.")
+        else:
+            selected_label = ", ".join(selected_sources)
+            with st.spinner(f"Running ingestion refresh for: {selected_label}"):
+                ok, logs = _run_command(
+                    "app.jobs.refresh_sources",
+                    env_overrides=_build_refresh_sources_env(selected_sources),
+                )
+            status_msg = f"Refresh completed for selected sources: {selected_label}."
+            error_msg = f"Refresh failed for selected sources: {selected_label}."
+            (st.success if ok else st.error)(status_msg if ok else error_msg)
+            st.caption(f"Selected sources: `{selected_label}`")
             st.code(logs or "No output")
 
     c4, _, _ = st.columns(3)
@@ -608,6 +657,21 @@ def render(filters: dict[str, Any]) -> None:
         st.session_state.admin_web_max_pages_draft = initial_web_max_pages
     if "admin_web_min_chars_draft" not in st.session_state:
         st.session_state.admin_web_min_chars_draft = initial_web_min_chars
+    if "admin_sync_widget_values" not in st.session_state:
+        st.session_state.admin_sync_widget_values = False
+    if "admin_communities_input" not in st.session_state:
+        st.session_state.admin_communities_input = st.session_state.admin_communities_draft
+    if "admin_keywords_input" not in st.session_state:
+        st.session_state.admin_keywords_input = st.session_state.admin_keywords_draft
+    if "admin_web_sites_input" not in st.session_state:
+        st.session_state.admin_web_sites_input = st.session_state.admin_web_sites_draft
+    if "admin_web_keywords_input" not in st.session_state:
+        st.session_state.admin_web_keywords_input = st.session_state.admin_web_keywords_draft
+    if "admin_web_max_pages_input" not in st.session_state:
+        st.session_state.admin_web_max_pages_input = int(st.session_state.admin_web_max_pages_draft)
+    if "admin_web_min_chars_input" not in st.session_state:
+        st.session_state.admin_web_min_chars_input = int(st.session_state.admin_web_min_chars_draft)
+    _sync_admin_form_inputs_from_drafts()
 
     notice_message = st.session_state.get("admin_config_notice_message")
     notice_level = st.session_state.get("admin_config_notice_level", "info")
@@ -628,7 +692,6 @@ def render(filters: dict[str, Any]) -> None:
             st.text_area(
                 "Subreddit list editor",
                 key="admin_communities_input",
-                value=st.session_state.admin_communities_draft,
                 height=180,
                 help="One subreddit per line.",
             )
@@ -637,7 +700,6 @@ def render(filters: dict[str, Any]) -> None:
             st.text_area(
                 "Keyword list editor",
                 key="admin_keywords_input",
-                value=st.session_state.admin_keywords_draft,
                 height=180,
                 help="One keyword per line.",
             )
@@ -648,7 +710,6 @@ def render(filters: dict[str, Any]) -> None:
             st.text_area(
                 "Web site list editor",
                 key="admin_web_sites_input",
-                value=st.session_state.admin_web_sites_draft,
                 height=180,
                 help="One site domain per line.",
             )
@@ -657,7 +718,6 @@ def render(filters: dict[str, Any]) -> None:
             st.text_area(
                 "Web keyword list editor",
                 key="admin_web_keywords_input",
-                value=st.session_state.admin_web_keywords_draft,
                 height=180,
                 help="One keyword per line.",
             )
@@ -669,7 +729,6 @@ def render(filters: dict[str, Any]) -> None:
                 min_value=1,
                 step=1,
                 key="admin_web_max_pages_input",
-                value=int(st.session_state.admin_web_max_pages_draft),
             )
         with web_settings_col2:
             st.number_input(
@@ -677,7 +736,6 @@ def render(filters: dict[str, Any]) -> None:
                 min_value=1,
                 step=50,
                 key="admin_web_min_chars_input",
-                value=int(st.session_state.admin_web_min_chars_draft),
             )
 
         action_col1, action_col2 = st.columns(2)

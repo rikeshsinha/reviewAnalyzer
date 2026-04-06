@@ -56,8 +56,16 @@ def _parse_source_yaml(text: str) -> dict[str, dict[str, Any]]:
     platforms: dict[str, dict[str, Any]] = {}
     in_platforms_block = False
     current_platform: str | None = None
+    pending_list_key: str | None = None
+    pending_list_indent: int | None = None
+    pending_list_items: list[Any] = []
 
-    for line_no, raw_line in enumerate(text.splitlines(), start=1):
+    lines = text.splitlines()
+    index = 0
+    while index < len(lines):
+        line_no = index + 1
+        raw_line = lines[index]
+        index += 1
         if not raw_line.strip() or raw_line.strip().startswith("#"):
             continue
 
@@ -72,6 +80,17 @@ def _parse_source_yaml(text: str) -> dict[str, dict[str, Any]]:
         if not in_platforms_block:
             raise SourceConfigError(f"line {line_no}: expected top-level 'platforms:' block")
 
+        if pending_list_key is not None:
+            if pending_list_indent is None:
+                raise SourceConfigError("internal parser state invalid for pending list")
+            if indent > pending_list_indent and line.startswith("- "):
+                pending_list_items.append(_parse_scalar(line[2:]))
+                continue
+            platforms[current_platform][pending_list_key] = list(pending_list_items)  # type: ignore[index]
+            pending_list_key = None
+            pending_list_indent = None
+            pending_list_items = []
+
         if indent == 2 and line.endswith(":"):
             current_platform = line[:-1].strip().lower()
             if not current_platform:
@@ -81,10 +100,25 @@ def _parse_source_yaml(text: str) -> dict[str, dict[str, Any]]:
 
         if indent == 4 and current_platform and ":" in line:
             key, raw_value = line.split(":", 1)
-            platforms[current_platform][key.strip()] = _parse_scalar(raw_value)
+            normalized_key = key.strip()
+            if not normalized_key:
+                raise SourceConfigError(f"line {line_no}: platform '{current_platform}' field name cannot be empty")
+            parsed = _parse_scalar(raw_value)
+            if parsed == "" and not raw_value.strip():
+                pending_list_key = normalized_key
+                pending_list_indent = indent
+                pending_list_items = []
+                continue
+            platforms[current_platform][normalized_key] = parsed
             continue
 
-        raise SourceConfigError(f"line {line_no}: unsupported YAML structure")
+        raise SourceConfigError(
+            f"line {line_no}: unsupported YAML structure for platform '{current_platform or 'unknown'}'. "
+            "Use 'field: [\"a\", \"b\"]' or block-style lists with '-' items."
+        )
+
+    if pending_list_key is not None and current_platform:
+        platforms[current_platform][pending_list_key] = list(pending_list_items)
 
     return platforms
 
@@ -213,7 +247,10 @@ def _merge_platform_values(base: dict[str, Any], override: dict[str, Any]) -> di
 def _load_raw_platforms(config_path: Path) -> dict[str, dict[str, Any]]:
     if not config_path.exists():
         return {}
-    return _parse_source_yaml(config_path.read_text(encoding="utf-8"))
+    text = config_path.read_text(encoding="utf-8")
+    if not text.strip():
+        return {}
+    return _parse_source_yaml(text)
 
 
 def _get_merged_platforms() -> dict[str, dict[str, Any]]:

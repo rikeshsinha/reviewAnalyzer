@@ -350,6 +350,23 @@ def test_run_public_json_ingestion_continues_after_failed_pair(monkeypatch) -> N
     assert docs[0]["external_id"] == "ok1"
 
 
+def test_run_pushshift_ingestion_error_includes_subreddit_and_query(monkeypatch) -> None:
+    def _boom(**kwargs):
+        raise PushshiftError("403")
+
+    monkeypatch.setattr("app.jobs.refresh_reddit.search_submissions", _boom)
+
+    try:
+        _run_pushshift_ingestion(
+            {"subreddits": ["android"], "keywords": ["battery"], "post_limit": 10},
+            days_back=7,
+        )
+        assert False, "Expected _run_pushshift_ingestion to raise"
+    except PushshiftError as exc:
+        assert "r/android" in str(exc)
+        assert "battery" in str(exc)
+
+
 def test_run_public_json_ingestion_falls_back_to_new_when_search_empty(monkeypatch) -> None:
     def _fake_public_json_search(**kwargs):
         return []
