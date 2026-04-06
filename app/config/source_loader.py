@@ -360,6 +360,50 @@ def _load_raw_platforms(config_path: Path) -> dict[str, dict[str, Any]]:
     return _parse_source_yaml(text, source_path=config_path)
 
 
+def load_raw_platforms(path: Path) -> dict[str, dict[str, Any]]:
+    """Load raw platform mappings from a source config file path."""
+
+    return _load_raw_platforms(path)
+
+
+def _format_yaml_scalar(value: Any) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, str):
+        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+        return f'"{escaped}"'
+    if isinstance(value, list) and all(isinstance(item, str) for item in value):
+        rendered = ", ".join(_format_yaml_scalar(item) for item in value)
+        return f"[{rendered}]"
+    raise SourceConfigError(
+        "Runtime platform overrides only support booleans, integers, strings, and string lists"
+    )
+
+
+def _platform_sort_key(platform_name: str) -> tuple[int, str]:
+    preferred = {"reddit": 0, "web_reviews": 1, "google_play": 2}
+    return (preferred.get(platform_name, 99), platform_name)
+
+
+def write_runtime_platform_overrides(overrides: dict[str, dict[str, Any]]) -> None:
+    """Persist runtime platform override mappings with stable ordering."""
+
+    lines = ["platforms:"]
+    for platform_name in sorted(overrides, key=_platform_sort_key):
+        values = overrides[platform_name]
+        if not isinstance(values, dict):
+            raise SourceConfigError(f"Runtime override for '{platform_name}' must be a mapping")
+        lines.append(f"  {platform_name}:")
+        for key in sorted(values):
+            serialized = _format_yaml_scalar(values[key])
+            lines.append(f"    {key}: {serialized}")
+
+    RUNTIME_SOURCE_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    RUNTIME_SOURCE_CONFIG_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def _get_merged_platforms() -> dict[str, dict[str, Any]]:
     base_platforms = _load_raw_platforms(BASE_SOURCE_CONFIG_PATH)
 

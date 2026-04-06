@@ -1,52 +1,59 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
+from pathlib import Path
 
+import pytest
+
+from app.config import source_loader
 from app.ui.pages import admin
 
 
-def test_build_refresh_sources_env_passes_selected_platforms() -> None:
-    env = admin._build_refresh_sources_env(["reddit", " google_play ", ""])  # noqa: SLF001
+def test_build_refresh_sources_env_passes_selected_platform() -> None:
+    env = admin._build_refresh_sources_env(" google_play ")  # noqa: SLF001
 
-    assert env == {"INGESTION_PLATFORMS": "reddit,google_play"}
+    assert env == {"INGESTION_PLATFORMS": "google_play"}
 
 
-def test_sync_admin_form_inputs_from_drafts_updates_widget_values_when_requested(monkeypatch) -> None:
-    fake_st = SimpleNamespace(
-        session_state={
-            "admin_sync_widget_values": True,
-            "admin_communities_draft": "a\nb",
-            "admin_keywords_draft": "k1",
-            "admin_web_sites_draft": "example.com",
-            "admin_web_keywords_draft": "sleep",
-            "admin_web_max_pages_draft": 75,
-            "admin_web_min_chars_draft": 600,
-            "admin_communities_input": "old",
-            "admin_keywords_input": "old",
-        }
+def test_save_selected_platform_override_updates_only_selected_platform(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime_path = tmp_path / "runtime_source_config.yaml"
+    runtime_path.write_text(
+        """
+platforms:
+  reddit:
+    enabled: true
+    communities: ["android"]
+    keywords: ["sleep"]
+""".strip(),
+        encoding="utf-8",
     )
-    monkeypatch.setattr(admin, "st", fake_st)
+    monkeypatch.setattr(admin, "RUNTIME_SOURCE_CONFIG_PATH", runtime_path)
+    monkeypatch.setattr(source_loader, "RUNTIME_SOURCE_CONFIG_PATH", runtime_path)
 
-    admin._sync_admin_form_inputs_from_drafts()  # noqa: SLF001
-
-    assert fake_st.session_state["admin_communities_input"] == "a\nb"
-    assert fake_st.session_state["admin_keywords_input"] == "k1"
-    assert fake_st.session_state["admin_web_sites_input"] == "example.com"
-    assert fake_st.session_state["admin_web_keywords_input"] == "sleep"
-    assert fake_st.session_state["admin_web_max_pages_input"] == 75
-    assert fake_st.session_state["admin_web_min_chars_input"] == 600
-    assert fake_st.session_state["admin_sync_widget_values"] is False
-
-
-def test_sync_admin_form_inputs_from_drafts_noop_without_flag(monkeypatch) -> None:
-    fake_st = SimpleNamespace(
-        session_state={
-            "admin_sync_widget_values": False,
-            "admin_communities_input": "keep",
-        }
+    admin._save_selected_platform_override(  # noqa: SLF001
+        "google_play",
+        {
+            "enabled": True,
+            "days_back": 7,
+            "apps": ["com.test.app"],
+            "countries": ["us"],
+            "languages": ["en"],
+            "max_reviews_per_app": 300,
+            "keywords": ["battery"],
+        },
     )
-    monkeypatch.setattr(admin, "st", fake_st)
 
-    admin._sync_admin_form_inputs_from_drafts()  # noqa: SLF001
+    text = runtime_path.read_text(encoding="utf-8")
+    assert "reddit:" in text
+    assert "google_play:" in text
+    assert "max_reviews_per_app: 300" in text
 
-    assert fake_st.session_state["admin_communities_input"] == "keep"
+
+def test_validate_platform_override_disabled_platform_message() -> None:
+    message = admin._validate_platform_override(  # noqa: SLF001
+        "reddit",
+        {"enabled": True, "days_back": 30, "communities": [], "keywords": ["x"]},
+    )
+
+    assert "At least one subreddit" in (message or "")
