@@ -124,39 +124,64 @@ def _rebuild_insight_cache(filters: dict[str, Any]) -> tuple[bool, str]:
         session.close()
 
 
-def _read_reddit_config(config_path: Path) -> tuple[list[str], list[str]]:
+def _read_platform_config(config_path: Path, platform: str) -> dict[str, Any]:
     if not config_path.exists():
-        return [], []
+        return {}
 
     lines = config_path.read_text(encoding="utf-8").splitlines()
-    in_reddit_block = False
-    communities: list[str] = []
-    keywords: list[str] = []
+    in_platform_block = False
+    values: dict[str, Any] = {}
+    pending_list_key: str | None = None
+    pending_list_items: list[str] = []
 
     for raw_line in lines:
         line = raw_line.strip()
         indent = len(raw_line) - len(raw_line.lstrip(" "))
 
-        if indent == 2 and line.startswith("reddit:"):
-            in_reddit_block = True
+        if indent == 2 and line == f"{platform}:":
+            in_platform_block = True
             continue
-        if in_reddit_block and indent == 2 and line.endswith(":") and not line.startswith("reddit:"):
+        if in_platform_block and indent == 2 and line.endswith(":") and line != f"{platform}:":
             break
+        if not in_platform_block:
+            continue
+        if not line or line.startswith("#"):
+            continue
 
-        if not in_reddit_block or indent != 4 or ":" not in line:
+        if pending_list_key:
+            if line.startswith("]"):
+                values[pending_list_key] = pending_list_items
+                pending_list_key = None
+                pending_list_items = []
+                continue
+            normalized = line.rstrip(",").strip().strip('"').strip("'").strip()
+            if normalized:
+                pending_list_items.append(normalized)
+            continue
+
+        if indent != 4 or ":" not in line:
             continue
 
         key, raw_value = line.split(":", 1)
+        key = key.strip()
         value = raw_value.strip()
-        if not (value.startswith("[") and value.endswith("]")):
-            continue
-        parsed = _parse_inline_list(value)
-        if key.strip() == "communities":
-            communities = parsed
-        elif key.strip() == "keywords":
-            keywords = parsed
 
-    return communities, keywords
+        if value == "[":
+            pending_list_key = key
+            pending_list_items = []
+            continue
+        if value.startswith("[") and value.endswith("]"):
+            values[key] = _parse_inline_list(value)
+            continue
+        if value.isdigit():
+            values[key] = int(value)
+            continue
+        if value.lower() in {"true", "false"}:
+            values[key] = value.lower() == "true"
+            continue
+        values[key] = value.strip('"').strip("'")
+
+    return values
 
 
 def _parse_inline_list(raw: str) -> list[str]:
@@ -191,11 +216,22 @@ def _render_inline_list(values: list[str]) -> str:
     return "[" + ", ".join(quoted) + "]"
 
 
-def _write_runtime_source_config(communities: list[str], keywords: list[str]) -> None:
+def _write_runtime_source_config(
+    *,
+    reddit_communities: list[str],
+    reddit_keywords: list[str],
+    web_sites: list[str],
+    web_keywords: list[str],
+    web_max_pages_per_site: int,
+    web_min_content_chars: int,
+) -> None:
     base_text = BASE_SOURCE_CONFIG_PATH.read_text(encoding="utf-8")
     lines = base_text.splitlines()
     output_lines: list[str] = []
     in_reddit_block = False
+    in_web_reviews_block = False
+    skipping_web_sites_multiline = False
+    web_keywords_written = False
 
     for raw_line in lines:
         line = raw_line.strip()
@@ -203,19 +239,54 @@ def _write_runtime_source_config(communities: list[str], keywords: list[str]) ->
 
         if indent == 2 and line.startswith("reddit:"):
             in_reddit_block = True
+            in_web_reviews_block = False
+            output_lines.append(raw_line)
+            continue
+        if indent == 2 and line.startswith("web_reviews:"):
+            in_web_reviews_block = True
+            in_reddit_block = False
             output_lines.append(raw_line)
             continue
         if in_reddit_block and indent == 2 and line.endswith(":") and not line.startswith("reddit:"):
             in_reddit_block = False
+        if in_web_reviews_block and indent == 2 and line.endswith(":") and not line.startswith("web_reviews:"):
+            if not web_keywords_written:
+                output_lines.append(f"    keywords: {_render_inline_list(web_keywords)}")
+                web_keywords_written = True
+            in_web_reviews_block = False
+
+        if skipping_web_sites_multiline:
+            if line.startswith("]"):
+                skipping_web_sites_multiline = False
+            continue
 
         if in_reddit_block and indent == 4 and line.startswith("communities:"):
-            output_lines.append(f"    communities: {_render_inline_list(communities)}")
+            output_lines.append(f"    communities: {_render_inline_list(reddit_communities)}")
             continue
         if in_reddit_block and indent == 4 and line.startswith("keywords:"):
-            output_lines.append(f"    keywords: {_render_inline_list(keywords)}")
+            output_lines.append(f"    keywords: {_render_inline_list(reddit_keywords)}")
+            continue
+
+        if in_web_reviews_block and indent == 4 and line.startswith("sites:"):
+            output_lines.append(f"    sites: {_render_inline_list(web_sites)}")
+            if line.endswith("[") or line == "sites:":
+                skipping_web_sites_multiline = True
+            continue
+        if in_web_reviews_block and indent == 4 and line.startswith("keywords:"):
+            output_lines.append(f"    keywords: {_render_inline_list(web_keywords)}")
+            web_keywords_written = True
+            continue
+        if in_web_reviews_block and indent == 4 and line.startswith("max_pages_per_site:"):
+            output_lines.append(f"    max_pages_per_site: {web_max_pages_per_site}")
+            continue
+        if in_web_reviews_block and indent == 4 and line.startswith("min_content_chars:"):
+            output_lines.append(f"    min_content_chars: {web_min_content_chars}")
             continue
 
         output_lines.append(raw_line)
+
+    if in_web_reviews_block and not web_keywords_written:
+        output_lines.append(f"    keywords: {_render_inline_list(web_keywords)}")
 
     RUNTIME_SOURCE_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     RUNTIME_SOURCE_CONFIG_PATH.write_text("\n".join(output_lines) + "\n", encoding="utf-8")
@@ -229,18 +300,54 @@ def _set_admin_config_notice(level: str, message: str) -> None:
 def _save_runtime_config_callback() -> None:
     communities_text = st.session_state.get("admin_communities_input", st.session_state.get("admin_communities_draft", ""))
     keywords_text = st.session_state.get("admin_keywords_input", st.session_state.get("admin_keywords_draft", ""))
+    web_sites_text = st.session_state.get("admin_web_sites_input", st.session_state.get("admin_web_sites_draft", ""))
+    web_keywords_text = st.session_state.get(
+        "admin_web_keywords_input",
+        st.session_state.get("admin_web_keywords_draft", ""),
+    )
+    web_max_pages_per_site = int(
+        st.session_state.get("admin_web_max_pages_input", st.session_state.get("admin_web_max_pages_draft", 50))
+    )
+    web_min_content_chars = int(
+        st.session_state.get(
+            "admin_web_min_chars_input",
+            st.session_state.get("admin_web_min_chars_draft", 500),
+        )
+    )
 
     communities = _normalize_text_list(communities_text)
     keywords = _normalize_text_list(keywords_text)
+    web_sites = _normalize_text_list(web_sites_text)
+    web_keywords = _normalize_text_list(web_keywords_text)
 
     if not communities:
         _set_admin_config_notice("error", "At least one subreddit is required.")
         return
+    if not web_sites:
+        _set_admin_config_notice("error", "At least one web review site is required.")
+        return
+    if web_max_pages_per_site <= 0:
+        _set_admin_config_notice("error", "Web max pages per site must be a positive integer.")
+        return
+    if web_min_content_chars <= 0:
+        _set_admin_config_notice("error", "Web min content length must be a positive integer.")
+        return
 
     try:
-        _write_runtime_source_config(communities, keywords)
+        _write_runtime_source_config(
+            reddit_communities=communities,
+            reddit_keywords=keywords,
+            web_sites=web_sites,
+            web_keywords=web_keywords,
+            web_max_pages_per_site=web_max_pages_per_site,
+            web_min_content_chars=web_min_content_chars,
+        )
         st.session_state.admin_communities_draft = "\n".join(communities)
         st.session_state.admin_keywords_draft = "\n".join(keywords)
+        st.session_state.admin_web_sites_draft = "\n".join(web_sites)
+        st.session_state.admin_web_keywords_draft = "\n".join(web_keywords)
+        st.session_state.admin_web_max_pages_draft = web_max_pages_per_site
+        st.session_state.admin_web_min_chars_draft = web_min_content_chars
         _set_admin_config_notice(
             "success",
             f"Saved runtime config to `{RUNTIME_SOURCE_CONFIG_PATH}`.",
@@ -251,12 +358,32 @@ def _save_runtime_config_callback() -> None:
 
 
 def _reset_to_defaults_callback() -> None:
-    default_communities, default_keywords = _read_reddit_config(BASE_SOURCE_CONFIG_PATH)
+    default_reddit = _read_platform_config(BASE_SOURCE_CONFIG_PATH, "reddit")
+    default_web = _read_platform_config(BASE_SOURCE_CONFIG_PATH, "web_reviews")
+
+    default_communities = [str(item) for item in default_reddit.get("communities", [])]
+    default_keywords = [str(item) for item in default_reddit.get("keywords", [])]
+    default_web_sites = [str(item) for item in default_web.get("sites", [])]
+    default_web_keywords = [str(item) for item in default_web.get("keywords", [])]
+    default_web_max_pages = int(default_web.get("max_pages_per_site", 50))
+    default_web_min_chars = int(default_web.get("min_content_chars", 500))
+
     st.session_state.admin_communities_draft = "\n".join(default_communities)
     st.session_state.admin_keywords_draft = "\n".join(default_keywords)
+    st.session_state.admin_web_sites_draft = "\n".join(default_web_sites)
+    st.session_state.admin_web_keywords_draft = "\n".join(default_web_keywords)
+    st.session_state.admin_web_max_pages_draft = default_web_max_pages
+    st.session_state.admin_web_min_chars_draft = default_web_min_chars
 
     try:
-        _write_runtime_source_config(default_communities, default_keywords)
+        _write_runtime_source_config(
+            reddit_communities=default_communities,
+            reddit_keywords=default_keywords,
+            web_sites=default_web_sites,
+            web_keywords=default_web_keywords,
+            web_max_pages_per_site=default_web_max_pages,
+            web_min_content_chars=default_web_min_chars,
+        )
         _set_admin_config_notice(
             "success",
             "Reset runtime config to defaults from base source_config.yaml.",
@@ -272,34 +399,54 @@ def render(filters: dict[str, Any]) -> None:
 
     default_to = date.today()
     default_from = default_to - timedelta(days=30)
-    date_range = st.date_input(
-        "Ingestion date range",
+    reddit_date_range = st.date_input(
+        "Reddit ingestion date range",
         value=(default_from, default_to),
         help="Applies only to the 'Refresh Reddit ingestion' action on this page.",
     )
-    ingestion_date_from: date | None = None
-    ingestion_date_to: date | None = None
+    reddit_ingestion_date_from: date | None = None
+    reddit_ingestion_date_to: date | None = None
 
-    if isinstance(date_range, tuple) and len(date_range) == 2:
-        ingestion_date_from, ingestion_date_to = date_range
-    elif isinstance(date_range, list) and len(date_range) == 2:
-        ingestion_date_from, ingestion_date_to = date_range[0], date_range[1]
+    if isinstance(reddit_date_range, tuple) and len(reddit_date_range) == 2:
+        reddit_ingestion_date_from, reddit_ingestion_date_to = reddit_date_range
+    elif isinstance(reddit_date_range, list) and len(reddit_date_range) == 2:
+        reddit_ingestion_date_from, reddit_ingestion_date_to = reddit_date_range[0], reddit_date_range[1]
 
-    invalid_date_range = (
-        ingestion_date_from is None or ingestion_date_to is None or ingestion_date_from > ingestion_date_to
+    invalid_reddit_date_range = (
+        reddit_ingestion_date_from is None
+        or reddit_ingestion_date_to is None
+        or reddit_ingestion_date_from > reddit_ingestion_date_to
     )
-    if invalid_date_range:
-        st.error("Invalid ingestion date range: start date must be on or before end date.")
+    if invalid_reddit_date_range:
+        st.error("Invalid Reddit ingestion date range: start date must be on or before end date.")
+
+    web_date_range = st.date_input(
+        "Web ingestion date range",
+        value=(default_from, default_to),
+        help="Applies only to the 'Refresh Web Reviews' action on this page.",
+    )
+    web_ingestion_date_from: date | None = None
+    web_ingestion_date_to: date | None = None
+    if isinstance(web_date_range, tuple) and len(web_date_range) == 2:
+        web_ingestion_date_from, web_ingestion_date_to = web_date_range
+    elif isinstance(web_date_range, list) and len(web_date_range) == 2:
+        web_ingestion_date_from, web_ingestion_date_to = web_date_range[0], web_date_range[1]
+
+    invalid_web_date_range = (
+        web_ingestion_date_from is None or web_ingestion_date_to is None or web_ingestion_date_from > web_ingestion_date_to
+    )
+    if invalid_web_date_range:
+        st.error("Invalid web ingestion date range: start date must be on or before end date.")
 
     c1, c2, c3 = st.columns(3)
     with c1:
-        if st.button("Refresh Reddit ingestion"):
-            if invalid_date_range or ingestion_date_from is None or ingestion_date_to is None:
+        if st.button("Refresh Reddit"):
+            if invalid_reddit_date_range or reddit_ingestion_date_from is None or reddit_ingestion_date_to is None:
                 st.error("Please select a valid ingestion date range before running refresh.")
                 st.stop()
             env_overrides = {
-                "REDDIT_INGEST_DATE_FROM": ingestion_date_from.isoformat(),
-                "REDDIT_INGEST_DATE_TO": ingestion_date_to.isoformat(),
+                "REDDIT_INGEST_DATE_FROM": reddit_ingestion_date_from.isoformat(),
+                "REDDIT_INGEST_DATE_TO": reddit_ingestion_date_to.isoformat(),
             }
             with st.spinner("Running Reddit ingestion job..."):
                 ok, logs = _run_command("app.jobs.refresh_reddit", env_overrides=env_overrides)
@@ -307,13 +454,28 @@ def render(filters: dict[str, Any]) -> None:
             st.code(logs or "No output")
 
     with c2:
+        if st.button("Refresh Web Reviews"):
+            if invalid_web_date_range or web_ingestion_date_from is None or web_ingestion_date_to is None:
+                st.error("Please select a valid web ingestion date range before running refresh.")
+                st.stop()
+            env_overrides = {
+                "WEB_REVIEWS_INGEST_DATE_FROM": web_ingestion_date_from.isoformat(),
+                "WEB_REVIEWS_INGEST_DATE_TO": web_ingestion_date_to.isoformat(),
+            }
+            with st.spinner("Running web review ingestion job..."):
+                ok, logs = _run_command("app.jobs.refresh_web_reviews", env_overrides=env_overrides)
+            (st.success if ok else st.error)("Refresh completed." if ok else "Refresh failed.")
+            st.code(logs or "No output")
+
+    with c3:
         if st.button("Run enrichment"):
             with st.spinner("Running enrichment job..."):
                 ok, logs = _run_command("app.jobs.enrich_new_docs")
             (st.success if ok else st.error)("Enrichment completed." if ok else "Enrichment failed.")
             st.code(logs or "No output")
 
-    with c3:
+    c4, _, _ = st.columns(3)
+    with c4:
         if st.button("Rebuild insight cache"):
             with st.spinner("Rebuilding insight cache..."):
                 ok, message = _rebuild_insight_cache(filters)
@@ -324,7 +486,7 @@ def render(filters: dict[str, Any]) -> None:
     if ingestion_platform_metrics:
         st.dataframe(ingestion_platform_metrics, width="stretch")
     else:
-        st.info("No ingestion runs yet. Run 'Refresh Reddit ingestion' to populate this table.")
+        st.info("No ingestion runs yet. Run 'Refresh Reddit' or 'Refresh Web Reviews' to populate this table.")
 
     st.markdown("#### Recent ingestion runs")
     ingestion_rows = _load_last_ingestion_runs()
@@ -400,7 +562,7 @@ def render(filters: dict[str, Any]) -> None:
                         "or enable recent-post fallback mode."
                     )
     else:
-        st.info("No ingestion runs yet. Run 'Refresh Reddit ingestion' to populate this table.")
+        st.info("No ingestion runs yet. Run 'Refresh Reddit' or 'Refresh Web Reviews' to populate this table.")
 
     st.markdown("#### Enrichment run stats / errors")
     enrichment_rows = _load_last_enrichment_runs()
@@ -413,12 +575,28 @@ def render(filters: dict[str, Any]) -> None:
     st.caption(f"Runtime config path: `{RUNTIME_SOURCE_CONFIG_PATH}`")
 
     initial_path = RUNTIME_SOURCE_CONFIG_PATH if RUNTIME_SOURCE_CONFIG_PATH.exists() else BASE_SOURCE_CONFIG_PATH
-    initial_communities, initial_keywords = _read_reddit_config(initial_path)
+    initial_reddit = _read_platform_config(initial_path, "reddit")
+    initial_web_reviews = _read_platform_config(initial_path, "web_reviews")
+
+    initial_communities = [str(item) for item in initial_reddit.get("communities", [])]
+    initial_keywords = [str(item) for item in initial_reddit.get("keywords", [])]
+    initial_web_sites = [str(item) for item in initial_web_reviews.get("sites", [])]
+    initial_web_keywords = [str(item) for item in initial_web_reviews.get("keywords", [])]
+    initial_web_max_pages = int(initial_web_reviews.get("max_pages_per_site", 50))
+    initial_web_min_chars = int(initial_web_reviews.get("min_content_chars", 500))
 
     if "admin_communities_draft" not in st.session_state:
         st.session_state.admin_communities_draft = "\n".join(initial_communities)
     if "admin_keywords_draft" not in st.session_state:
         st.session_state.admin_keywords_draft = "\n".join(initial_keywords)
+    if "admin_web_sites_draft" not in st.session_state:
+        st.session_state.admin_web_sites_draft = "\n".join(initial_web_sites)
+    if "admin_web_keywords_draft" not in st.session_state:
+        st.session_state.admin_web_keywords_draft = "\n".join(initial_web_keywords)
+    if "admin_web_max_pages_draft" not in st.session_state:
+        st.session_state.admin_web_max_pages_draft = initial_web_max_pages
+    if "admin_web_min_chars_draft" not in st.session_state:
+        st.session_state.admin_web_min_chars_draft = initial_web_min_chars
 
     notice_message = st.session_state.get("admin_config_notice_message")
     notice_level = st.session_state.get("admin_config_notice_level", "info")
@@ -433,8 +611,8 @@ def render(filters: dict[str, Any]) -> None:
     # Manual regression check: edit values, click Save, click Reset, and verify no
     # `st.session_state` widget mutation errors are raised.
     with st.form("admin_source_config_form"):
-        communities_col, keywords_col = st.columns(2)
-        with communities_col:
+        reddit_communities_col, reddit_keywords_col = st.columns(2)
+        with reddit_communities_col:
             st.markdown("**Reddit communities**")
             st.text_area(
                 "Subreddit list editor",
@@ -443,7 +621,7 @@ def render(filters: dict[str, Any]) -> None:
                 height=180,
                 help="One subreddit per line.",
             )
-        with keywords_col:
+        with reddit_keywords_col:
             st.markdown("**Reddit keywords**")
             st.text_area(
                 "Keyword list editor",
@@ -451,6 +629,44 @@ def render(filters: dict[str, Any]) -> None:
                 value=st.session_state.admin_keywords_draft,
                 height=180,
                 help="One keyword per line.",
+            )
+
+        web_sites_col, web_keywords_col = st.columns(2)
+        with web_sites_col:
+            st.markdown("**Web review sites**")
+            st.text_area(
+                "Web site list editor",
+                key="admin_web_sites_input",
+                value=st.session_state.admin_web_sites_draft,
+                height=180,
+                help="One site domain per line.",
+            )
+        with web_keywords_col:
+            st.markdown("**Web review keywords**")
+            st.text_area(
+                "Web keyword list editor",
+                key="admin_web_keywords_input",
+                value=st.session_state.admin_web_keywords_draft,
+                height=180,
+                help="One keyword per line.",
+            )
+
+        web_settings_col1, web_settings_col2 = st.columns(2)
+        with web_settings_col1:
+            st.number_input(
+                "Max pages per site",
+                min_value=1,
+                step=1,
+                key="admin_web_max_pages_input",
+                value=int(st.session_state.admin_web_max_pages_draft),
+            )
+        with web_settings_col2:
+            st.number_input(
+                "Min content length (chars)",
+                min_value=1,
+                step=50,
+                key="admin_web_min_chars_input",
+                value=int(st.session_state.admin_web_min_chars_draft),
             )
 
         action_col1, action_col2 = st.columns(2)
