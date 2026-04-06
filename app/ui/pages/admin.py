@@ -7,18 +7,16 @@ import sys
 from datetime import date, timedelta
 import os
 import json
-from pathlib import Path
 from typing import Any
 
 import streamlit as st
 from sqlalchemy import text
 
 from app.config.source_loader import (
-    BASE_SOURCE_CONFIG_PATH,
     RUNTIME_SOURCE_CONFIG_PATH,
-    SourceConfigError,
+    load_raw_platforms,
     load_source_config,
-    get_enabled_platform_configs,
+    write_runtime_platform_overrides,
 )
 from app.db.session import SessionLocal
 from app.services.analysis_service import AnalysisService
@@ -134,28 +132,7 @@ def _rebuild_insight_cache(filters: dict[str, Any]) -> tuple[bool, str]:
         session.close()
 
 
-def _read_platform_config(config_path: Path, platform: str) -> dict[str, Any]:
-    if not config_path.exists():
-        return {}
-
-    try:
-        configs = load_source_config(config_path)
-    except SourceConfigError:
-        return {}
-
-    for cfg in configs:
-        if cfg.platform != platform:
-            continue
-        values: dict[str, Any] = {
-            "enabled": cfg.enabled,
-            "days_back": cfg.days_back,
-            **cfg.config,
-        }
-        if platform == "reddit" and "subreddits" in values:
-            values["communities"] = list(values.pop("subreddits"))
-        return values
-
-    return {}
+PLATFORM_OPTIONS = ["reddit", "web_reviews", "google_play"]
 
 
 def _normalize_text_list(raw_text: str) -> list[str]:
@@ -173,206 +150,101 @@ def _normalize_text_list(raw_text: str) -> list[str]:
     return values
 
 
-def _render_inline_list(values: list[str]) -> str:
-    quoted = [f'"{value}"' for value in values]
-    return "[" + ", ".join(quoted) + "]"
-
-
-def _write_runtime_source_config(
-    *,
-    reddit_communities: list[str],
-    reddit_keywords: list[str],
-    web_sites: list[str],
-    web_keywords: list[str],
-    web_max_pages_per_site: int,
-    web_min_content_chars: int,
-) -> None:
-    base_text = BASE_SOURCE_CONFIG_PATH.read_text(encoding="utf-8")
-    lines = base_text.splitlines()
-    output_lines: list[str] = []
-    in_reddit_block = False
-    in_web_reviews_block = False
-    skipping_web_sites_multiline = False
-    web_keywords_written = False
-
-    for raw_line in lines:
-        line = raw_line.strip()
-        indent = len(raw_line) - len(raw_line.lstrip(" "))
-
-        if indent == 2 and line.startswith("reddit:"):
-            in_reddit_block = True
-            in_web_reviews_block = False
-            output_lines.append(raw_line)
-            continue
-        if indent == 2 and line.startswith("web_reviews:"):
-            in_web_reviews_block = True
-            in_reddit_block = False
-            output_lines.append(raw_line)
-            continue
-        if in_reddit_block and indent == 2 and line.endswith(":") and not line.startswith("reddit:"):
-            in_reddit_block = False
-        if in_web_reviews_block and indent == 2 and line.endswith(":") and not line.startswith("web_reviews:"):
-            if not web_keywords_written:
-                output_lines.append(f"    keywords: {_render_inline_list(web_keywords)}")
-                web_keywords_written = True
-            in_web_reviews_block = False
-
-        if skipping_web_sites_multiline:
-            if line.startswith("]"):
-                skipping_web_sites_multiline = False
-            continue
-
-        if in_reddit_block and indent == 4 and line.startswith("communities:"):
-            output_lines.append(f"    communities: {_render_inline_list(reddit_communities)}")
-            continue
-        if in_reddit_block and indent == 4 and line.startswith("keywords:"):
-            output_lines.append(f"    keywords: {_render_inline_list(reddit_keywords)}")
-            continue
-
-        if in_web_reviews_block and indent == 4 and line.startswith("sites:"):
-            output_lines.append(f"    sites: {_render_inline_list(web_sites)}")
-            if line.endswith("[") or line == "sites:":
-                skipping_web_sites_multiline = True
-            continue
-        if in_web_reviews_block and indent == 4 and line.startswith("keywords:"):
-            output_lines.append(f"    keywords: {_render_inline_list(web_keywords)}")
-            web_keywords_written = True
-            continue
-        if in_web_reviews_block and indent == 4 and line.startswith("max_pages_per_site:"):
-            output_lines.append(f"    max_pages_per_site: {web_max_pages_per_site}")
-            continue
-        if in_web_reviews_block and indent == 4 and line.startswith("min_content_chars:"):
-            output_lines.append(f"    min_content_chars: {web_min_content_chars}")
-            continue
-
-        output_lines.append(raw_line)
-
-    if in_web_reviews_block and not web_keywords_written:
-        output_lines.append(f"    keywords: {_render_inline_list(web_keywords)}")
-
-    RUNTIME_SOURCE_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    RUNTIME_SOURCE_CONFIG_PATH.write_text("\n".join(output_lines) + "\n", encoding="utf-8")
-
-
 def _set_admin_config_notice(level: str, message: str) -> None:
     st.session_state.admin_config_notice_level = level
     st.session_state.admin_config_notice_message = message
 
 
-def _sync_admin_form_inputs_from_drafts() -> None:
-    if not st.session_state.get("admin_sync_widget_values", False):
-        return
-    st.session_state["admin_communities_input"] = st.session_state.get("admin_communities_draft", "")
-    st.session_state["admin_keywords_input"] = st.session_state.get("admin_keywords_draft", "")
-    st.session_state["admin_web_sites_input"] = st.session_state.get("admin_web_sites_draft", "")
-    st.session_state["admin_web_keywords_input"] = st.session_state.get("admin_web_keywords_draft", "")
-    st.session_state["admin_web_max_pages_input"] = int(st.session_state.get("admin_web_max_pages_draft", 50))
-    st.session_state["admin_web_min_chars_input"] = int(st.session_state.get("admin_web_min_chars_draft", 500))
-    st.session_state["admin_sync_widget_values"] = False
+def _build_refresh_sources_env(selected_platform: str) -> dict[str, str]:
+    return {"INGESTION_PLATFORMS": selected_platform.strip()}
 
 
-def _build_refresh_sources_env(selected_sources: list[str]) -> dict[str, str]:
-    normalized = [item.strip() for item in selected_sources if item.strip()]
-    return {"INGESTION_PLATFORMS": ",".join(normalized)}
+def _get_platform_view_model(platform: str, config: dict[str, Any]) -> dict[str, Any]:
+    model = {"enabled": bool(config.get("enabled", False)), "days_back": int(config.get("days_back", 30))}
+    if platform == "reddit":
+        model["communities"] = list(config.get("subreddits", config.get("communities", [])))
+        model["keywords"] = list(config.get("keywords", []))
+    elif platform == "web_reviews":
+        model["sites"] = list(config.get("sites", []))
+        model["keywords"] = list(config.get("keywords", []))
+        model["max_pages_per_site"] = int(config.get("max_pages_per_site", 50))
+    elif platform == "google_play":
+        model["apps"] = list(config.get("apps", []))
+        model["countries"] = list(config.get("countries", []))
+        model["languages"] = list(config.get("languages", []))
+        model["max_reviews_per_app"] = int(config.get("max_reviews_per_app", 1000))
+        model["keywords"] = list(config.get("keywords", []))
+    return model
 
 
-def _save_runtime_config_callback() -> None:
-    communities_text = st.session_state.get("admin_communities_input", st.session_state.get("admin_communities_draft", ""))
-    keywords_text = st.session_state.get("admin_keywords_input", st.session_state.get("admin_keywords_draft", ""))
-    web_sites_text = st.session_state.get("admin_web_sites_input", st.session_state.get("admin_web_sites_draft", ""))
-    web_keywords_text = st.session_state.get(
-        "admin_web_keywords_input",
-        st.session_state.get("admin_web_keywords_draft", ""),
-    )
-    web_max_pages_per_site = int(
-        st.session_state.get("admin_web_max_pages_input", st.session_state.get("admin_web_max_pages_draft", 50))
-    )
-    web_min_content_chars = int(
-        st.session_state.get(
-            "admin_web_min_chars_input",
-            st.session_state.get("admin_web_min_chars_draft", 500),
-        )
-    )
-
-    communities = _normalize_text_list(communities_text)
-    keywords = _normalize_text_list(keywords_text)
-    web_sites = _normalize_text_list(web_sites_text)
-    web_keywords = _normalize_text_list(web_keywords_text)
-
-    if not communities:
-        _set_admin_config_notice("error", "At least one subreddit is required.")
-        return
-    if not web_sites:
-        _set_admin_config_notice("error", "At least one web review site is required.")
-        return
-    if web_max_pages_per_site <= 0:
-        _set_admin_config_notice("error", "Web max pages per site must be a positive integer.")
-        return
-    if web_min_content_chars <= 0:
-        _set_admin_config_notice("error", "Web min content length must be a positive integer.")
-        return
-
-    try:
-        _write_runtime_source_config(
-            reddit_communities=communities,
-            reddit_keywords=keywords,
-            web_sites=web_sites,
-            web_keywords=web_keywords,
-            web_max_pages_per_site=web_max_pages_per_site,
-            web_min_content_chars=web_min_content_chars,
-        )
-        st.session_state.admin_communities_draft = "\n".join(communities)
-        st.session_state.admin_keywords_draft = "\n".join(keywords)
-        st.session_state.admin_web_sites_draft = "\n".join(web_sites)
-        st.session_state.admin_web_keywords_draft = "\n".join(web_keywords)
-        st.session_state.admin_web_max_pages_draft = web_max_pages_per_site
-        st.session_state.admin_web_min_chars_draft = web_min_content_chars
-        st.session_state.admin_sync_widget_values = True
-        _set_admin_config_notice(
-            "success",
-            f"Saved runtime config to `{RUNTIME_SOURCE_CONFIG_PATH}`.",
-        )
-        st.rerun()
-    except Exception as exc:  # noqa: BLE001
-        _set_admin_config_notice("error", f"Failed to save config: {exc}")
+def _get_selected_platform_config(platform: str) -> dict[str, Any]:
+    for cfg in load_source_config():
+        if cfg.platform == platform:
+            return _get_platform_view_model(platform, {"enabled": cfg.enabled, "days_back": cfg.days_back, **cfg.config})
+    return _get_platform_view_model(platform, {})
 
 
-def _reset_to_defaults_callback() -> None:
-    default_reddit = _read_platform_config(BASE_SOURCE_CONFIG_PATH, "reddit")
-    default_web = _read_platform_config(BASE_SOURCE_CONFIG_PATH, "web_reviews")
+def _get_platform_override_inputs(platform: str) -> dict[str, Any]:
+    values: dict[str, Any] = {
+        "enabled": bool(st.session_state.get("admin_platform_enabled", False)),
+        "days_back": int(st.session_state.get("admin_platform_days_back", 30)),
+    }
+    if platform == "reddit":
+        values["communities"] = _normalize_text_list(st.session_state.get("admin_platform_communities", ""))
+        values["keywords"] = _normalize_text_list(st.session_state.get("admin_platform_keywords", ""))
+    elif platform == "web_reviews":
+        values["sites"] = _normalize_text_list(st.session_state.get("admin_platform_sites", ""))
+        values["keywords"] = _normalize_text_list(st.session_state.get("admin_platform_keywords", ""))
+        values["max_pages_per_site"] = int(st.session_state.get("admin_platform_max_pages_per_site", 50))
+    elif platform == "google_play":
+        values["apps"] = _normalize_text_list(st.session_state.get("admin_platform_apps", ""))
+        values["countries"] = _normalize_text_list(st.session_state.get("admin_platform_countries", ""))
+        values["languages"] = _normalize_text_list(st.session_state.get("admin_platform_languages", ""))
+        values["max_reviews_per_app"] = int(st.session_state.get("admin_platform_max_reviews_per_app", 1000))
+        values["keywords"] = _normalize_text_list(st.session_state.get("admin_platform_keywords", ""))
+    return values
 
-    default_communities = [str(item) for item in default_reddit.get("communities", [])]
-    default_keywords = [str(item) for item in default_reddit.get("keywords", [])]
-    default_web_sites = [str(item) for item in default_web.get("sites", [])]
-    default_web_keywords = [str(item) for item in default_web.get("keywords", [])]
-    default_web_max_pages = int(default_web.get("max_pages_per_site", 50))
-    default_web_min_chars = int(default_web.get("min_content_chars", 500))
 
-    st.session_state.admin_communities_draft = "\n".join(default_communities)
-    st.session_state.admin_keywords_draft = "\n".join(default_keywords)
-    st.session_state.admin_web_sites_draft = "\n".join(default_web_sites)
-    st.session_state.admin_web_keywords_draft = "\n".join(default_web_keywords)
-    st.session_state.admin_web_max_pages_draft = default_web_max_pages
-    st.session_state.admin_web_min_chars_draft = default_web_min_chars
-    st.session_state.admin_sync_widget_values = True
+def _validate_platform_override(platform: str, values: dict[str, Any]) -> str | None:
+    if values["days_back"] < 0:
+        return "Days back must be zero or greater."
+    if platform == "reddit" and values["enabled"] and not values.get("communities"):
+        return "At least one subreddit/community is required when Reddit is enabled."
+    if platform == "web_reviews":
+        if values["enabled"] and not values.get("sites"):
+            return "At least one web review site is required when web_reviews is enabled."
+        if int(values.get("max_pages_per_site", 0)) <= 0:
+            return "Max pages per site must be a positive integer."
+    if platform == "google_play":
+        if values["enabled"] and not values.get("apps"):
+            return "At least one Google Play app is required when google_play is enabled."
+        if int(values.get("max_reviews_per_app", 0)) <= 0:
+            return "Max reviews per app must be a positive integer."
+    return None
 
-    try:
-        _write_runtime_source_config(
-            reddit_communities=default_communities,
-            reddit_keywords=default_keywords,
-            web_sites=default_web_sites,
-            web_keywords=default_web_keywords,
-            web_max_pages_per_site=default_web_max_pages,
-            web_min_content_chars=default_web_min_chars,
-        )
-        _set_admin_config_notice(
-            "success",
-            "Reset runtime config to defaults from base source_config.yaml.",
-        )
-    except Exception as exc:  # noqa: BLE001
-        _set_admin_config_notice("error", f"Failed to reset runtime config: {exc}")
 
-    st.rerun()
+def _platform_override_payload(platform: str, values: dict[str, Any]) -> dict[str, Any]:
+    payload = {"enabled": values["enabled"], "days_back": values["days_back"]}
+    if platform == "reddit":
+        payload["communities"] = values["communities"]
+        payload["keywords"] = values["keywords"]
+    elif platform == "web_reviews":
+        payload["sites"] = values["sites"]
+        payload["keywords"] = values["keywords"]
+        payload["max_pages_per_site"] = values["max_pages_per_site"]
+    elif platform == "google_play":
+        payload["apps"] = values["apps"]
+        payload["countries"] = values["countries"]
+        payload["languages"] = values["languages"]
+        payload["max_reviews_per_app"] = values["max_reviews_per_app"]
+        payload["keywords"] = values["keywords"]
+    return payload
+
+
+def _save_selected_platform_override(platform: str, values: dict[str, Any]) -> None:
+    overrides = load_raw_platforms(RUNTIME_SOURCE_CONFIG_PATH)
+    overrides[platform] = _platform_override_payload(platform, values)
+    write_runtime_platform_overrides(overrides)
 
 
 def render(filters: dict[str, Any]) -> None:
@@ -459,34 +331,54 @@ def render(filters: dict[str, Any]) -> None:
             (st.success if ok else st.error)("Enrichment completed." if ok else "Enrichment failed.")
             st.code(logs or "No output")
 
-    st.markdown("#### Combined ingestion refresh")
-    available_sources: list[str] = []
-    try:
-        available_sources = [cfg.platform for cfg in get_enabled_platform_configs()]
-    except SourceConfigError as exc:
-        st.error(f"Unable to load enabled sources: {exc}")
-    selected_sources = st.multiselect(
-        "Sources to refresh",
-        options=available_sources,
-        default=available_sources,
-        help="Only selected enabled sources will run (passed via INGESTION_PLATFORMS).",
+    selected_platform = st.selectbox(
+        "Admin platform",
+        options=PLATFORM_OPTIONS,
+        key="admin_selected_platform",
+        help="Select one platform for config editing and refresh operations.",
     )
-    if st.button("Refresh selected sources"):
-        if not selected_sources:
-            st.error("Please select at least one source to refresh.")
+    if st.session_state.get("admin_last_selected_platform") != selected_platform:
+        for key in [
+            "admin_platform_enabled",
+            "admin_platform_days_back",
+            "admin_platform_keywords",
+            "admin_platform_communities",
+            "admin_platform_sites",
+            "admin_platform_max_pages_per_site",
+            "admin_platform_apps",
+            "admin_platform_countries",
+            "admin_platform_languages",
+            "admin_platform_max_reviews_per_app",
+        ]:
+            st.session_state.pop(key, None)
+        st.session_state["admin_last_selected_platform"] = selected_platform
+
+    st.markdown("#### Platform-scoped ingestion refresh")
+    st.caption("Refresh runs only selected platform.")
+    if selected_platform == "web_reviews":
+        st.info("Placeholder adapter: validates config; crawler not yet implemented.")
+    if st.button("Refresh selected platform"):
+        selected_config = _get_selected_platform_config(selected_platform)
+        if not selected_config.get("enabled", False):
+            st.warning(
+                f"Cannot refresh `{selected_platform}` because it is disabled in merged source config. "
+                "Enable it in Source configuration first."
+            )
         else:
-            selected_label = ", ".join(selected_sources)
-            with st.spinner(f"Running ingestion refresh for: {selected_label}"):
+            refresh_module = "app.jobs.refresh_sources"
+            with st.spinner(f"Running ingestion refresh for: {selected_platform}"):
                 ok, logs = _run_command(
-                    "app.jobs.refresh_sources",
-                    env_overrides=_build_refresh_sources_env(selected_sources),
+                    refresh_module,
+                    env_overrides=_build_refresh_sources_env(selected_platform),
                 )
-            status_msg = f"Refresh completed for selected sources: {selected_label}."
-            error_msg = f"Refresh failed for selected sources: {selected_label}."
-            (st.success if ok else st.error)(status_msg if ok else error_msg)
-            st.caption(f"Selected sources: `{selected_label}`")
-            output_with_context = f"Selected sources: {selected_label}\n\n{logs}" if logs else f"Selected sources: {selected_label}"
-            st.code(output_with_context)
+            summary = f"Selected platform: {selected_platform}\nJob module: {refresh_module}"
+            if ok:
+                st.success(f"Refresh completed for selected platform `{selected_platform}`.")
+            else:
+                st.error(f"Refresh failed for selected platform `{selected_platform}`.")
+                if "Selected platform(s) are not enabled or not defined" in logs:
+                    st.warning("Selected platform is not enabled/defined in merged config; refresh was blocked.")
+            st.code(f"{summary}\n\n{logs}" if logs else summary)
 
     c4, _, _ = st.columns(3)
     with c4:
@@ -587,45 +479,23 @@ def render(filters: dict[str, Any]) -> None:
 
     st.markdown("#### Source configuration")
     st.caption(f"Runtime config path: `{RUNTIME_SOURCE_CONFIG_PATH}`")
+    current_platform_config = _get_selected_platform_config(selected_platform)
+    st.caption("Refresh runs only selected platform.")
+    if selected_platform == "web_reviews":
+        st.info("Placeholder adapter: validates config; crawler not yet implemented.")
 
-    initial_path = RUNTIME_SOURCE_CONFIG_PATH if RUNTIME_SOURCE_CONFIG_PATH.exists() else BASE_SOURCE_CONFIG_PATH
-    initial_reddit = _read_platform_config(initial_path, "reddit")
-    initial_web_reviews = _read_platform_config(initial_path, "web_reviews")
-
-    initial_communities = [str(item) for item in initial_reddit.get("communities", [])]
-    initial_keywords = [str(item) for item in initial_reddit.get("keywords", [])]
-    initial_web_sites = [str(item) for item in initial_web_reviews.get("sites", [])]
-    initial_web_keywords = [str(item) for item in initial_web_reviews.get("keywords", [])]
-    initial_web_max_pages = int(initial_web_reviews.get("max_pages_per_site", 50))
-    initial_web_min_chars = int(initial_web_reviews.get("min_content_chars", 500))
-
-    if "admin_communities_draft" not in st.session_state:
-        st.session_state.admin_communities_draft = "\n".join(initial_communities)
-    if "admin_keywords_draft" not in st.session_state:
-        st.session_state.admin_keywords_draft = "\n".join(initial_keywords)
-    if "admin_web_sites_draft" not in st.session_state:
-        st.session_state.admin_web_sites_draft = "\n".join(initial_web_sites)
-    if "admin_web_keywords_draft" not in st.session_state:
-        st.session_state.admin_web_keywords_draft = "\n".join(initial_web_keywords)
-    if "admin_web_max_pages_draft" not in st.session_state:
-        st.session_state.admin_web_max_pages_draft = initial_web_max_pages
-    if "admin_web_min_chars_draft" not in st.session_state:
-        st.session_state.admin_web_min_chars_draft = initial_web_min_chars
-    if "admin_sync_widget_values" not in st.session_state:
-        st.session_state.admin_sync_widget_values = False
-    if "admin_communities_input" not in st.session_state:
-        st.session_state.admin_communities_input = st.session_state.admin_communities_draft
-    if "admin_keywords_input" not in st.session_state:
-        st.session_state.admin_keywords_input = st.session_state.admin_keywords_draft
-    if "admin_web_sites_input" not in st.session_state:
-        st.session_state.admin_web_sites_input = st.session_state.admin_web_sites_draft
-    if "admin_web_keywords_input" not in st.session_state:
-        st.session_state.admin_web_keywords_input = st.session_state.admin_web_keywords_draft
-    if "admin_web_max_pages_input" not in st.session_state:
-        st.session_state.admin_web_max_pages_input = int(st.session_state.admin_web_max_pages_draft)
-    if "admin_web_min_chars_input" not in st.session_state:
-        st.session_state.admin_web_min_chars_input = int(st.session_state.admin_web_min_chars_draft)
-    _sync_admin_form_inputs_from_drafts()
+    st.session_state["admin_platform_enabled"] = st.session_state.get(
+        "admin_platform_enabled",
+        current_platform_config["enabled"],
+    )
+    st.session_state["admin_platform_days_back"] = st.session_state.get(
+        "admin_platform_days_back",
+        current_platform_config["days_back"],
+    )
+    st.session_state["admin_platform_keywords"] = st.session_state.get(
+        "admin_platform_keywords",
+        "\n".join(current_platform_config.get("keywords", [])),
+    )
 
     notice_message = st.session_state.get("admin_config_notice_message")
     notice_level = st.session_state.get("admin_config_notice_level", "info")
@@ -636,65 +506,75 @@ def render(filters: dict[str, Any]) -> None:
             st.error(notice_message)
         else:
             st.info(notice_message)
-
-    # Manual regression check: edit values, click Save, click Reset, and verify no
-    # `st.session_state` widget mutation errors are raised.
     with st.form("admin_source_config_form"):
-        reddit_communities_col, reddit_keywords_col = st.columns(2)
-        with reddit_communities_col:
-            st.markdown("**Reddit communities**")
-            st.text_area(
-                "Subreddit list editor",
-                key="admin_communities_input",
-                height=180,
-                help="One subreddit per line.",
-            )
-        with reddit_keywords_col:
-            st.markdown("**Reddit keywords**")
-            st.text_area(
-                "Keyword list editor",
-                key="admin_keywords_input",
-                height=180,
-                help="One keyword per line.",
-            )
+        st.checkbox("Enabled", key="admin_platform_enabled")
+        st.number_input("Days back", min_value=0, step=1, key="admin_platform_days_back")
 
-        web_sites_col, web_keywords_col = st.columns(2)
-        with web_sites_col:
-            st.markdown("**Web review sites**")
-            st.text_area(
-                "Web site list editor",
-                key="admin_web_sites_input",
-                height=180,
-                help="One site domain per line.",
+        if selected_platform == "reddit":
+            st.session_state["admin_platform_communities"] = st.session_state.get(
+                "admin_platform_communities",
+                "\n".join(current_platform_config.get("communities", [])),
             )
-        with web_keywords_col:
-            st.markdown("**Web review keywords**")
-            st.text_area(
-                "Web keyword list editor",
-                key="admin_web_keywords_input",
-                height=180,
-                help="One keyword per line.",
+            st.text_area("Communities / subreddits", key="admin_platform_communities", height=160)
+            st.text_area("Keywords", key="admin_platform_keywords", height=140)
+        elif selected_platform == "web_reviews":
+            st.session_state["admin_platform_sites"] = st.session_state.get(
+                "admin_platform_sites",
+                "\n".join(current_platform_config.get("sites", [])),
             )
-
-        web_settings_col1, web_settings_col2 = st.columns(2)
-        with web_settings_col1:
+            st.text_area("Sites", key="admin_platform_sites", height=160)
+            st.text_area("Keywords", key="admin_platform_keywords", height=140)
+            st.session_state["admin_platform_max_pages_per_site"] = st.session_state.get(
+                "admin_platform_max_pages_per_site",
+                current_platform_config.get("max_pages_per_site", 50),
+            )
             st.number_input(
                 "Max pages per site",
                 min_value=1,
                 step=1,
-                key="admin_web_max_pages_input",
+                key="admin_platform_max_pages_per_site",
             )
-        with web_settings_col2:
+        elif selected_platform == "google_play":
+            st.session_state["admin_platform_apps"] = st.session_state.get(
+                "admin_platform_apps",
+                "\n".join(current_platform_config.get("apps", [])),
+            )
+            st.session_state["admin_platform_countries"] = st.session_state.get(
+                "admin_platform_countries",
+                "\n".join(current_platform_config.get("countries", [])),
+            )
+            st.session_state["admin_platform_languages"] = st.session_state.get(
+                "admin_platform_languages",
+                "\n".join(current_platform_config.get("languages", [])),
+            )
+            st.text_area("Apps", key="admin_platform_apps", height=120)
+            st.text_area("Countries (ISO-2)", key="admin_platform_countries", height=120)
+            st.text_area("Languages", key="admin_platform_languages", height=120)
+            st.text_area("Keywords", key="admin_platform_keywords", height=120)
+            st.session_state["admin_platform_max_reviews_per_app"] = st.session_state.get(
+                "admin_platform_max_reviews_per_app",
+                current_platform_config.get("max_reviews_per_app", 1000),
+            )
             st.number_input(
-                "Min content length (chars)",
+                "Max reviews per app",
                 min_value=1,
                 step=50,
-                key="admin_web_min_chars_input",
+                key="admin_platform_max_reviews_per_app",
             )
 
-        action_col1, action_col2 = st.columns(2)
-        with action_col1:
-            st.form_submit_button("Save config", type="primary", on_click=_save_runtime_config_callback)
-
-        with action_col2:
-            st.form_submit_button("Reset to defaults", on_click=_reset_to_defaults_callback)
+        submitted = st.form_submit_button("Save selected platform config", type="primary")
+        if submitted:
+            override_values = _get_platform_override_inputs(selected_platform)
+            validation_message = _validate_platform_override(selected_platform, override_values)
+            if validation_message:
+                _set_admin_config_notice("error", validation_message)
+            else:
+                try:
+                    _save_selected_platform_override(selected_platform, override_values)
+                    _set_admin_config_notice(
+                        "success",
+                        f"Saved `{selected_platform}` runtime override to `{RUNTIME_SOURCE_CONFIG_PATH}`.",
+                    )
+                    st.rerun()
+                except Exception as exc:  # noqa: BLE001
+                    _set_admin_config_notice("error", f"Failed to save config: {exc}")

@@ -5,7 +5,13 @@ from pathlib import Path
 import pytest
 
 from app.config import source_loader
-from app.config.source_loader import SourceConfigError, get_enabled_platform_configs, load_source_config
+from app.config.source_loader import (
+    SourceConfigError,
+    get_enabled_platform_configs,
+    load_raw_platforms,
+    load_source_config,
+    write_runtime_platform_overrides,
+)
 
 
 def test_load_source_config_normalizes_platforms(tmp_path: Path) -> None:
@@ -419,3 +425,45 @@ platforms:
     assert reddit.config["subreddits"] == ["BaseOnly"]
     assert reddit.config["keywords"] == ["base_keyword"]
     assert "Ignoring runtime source override" in caplog.text
+
+
+def test_runtime_overrides_write_and_read_round_trip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    runtime_path = tmp_path / "runtime_source_config.yaml"
+    monkeypatch.setattr(source_loader, "RUNTIME_SOURCE_CONFIG_PATH", runtime_path)
+
+    overrides = {
+        "google_play": {
+            "enabled": True,
+            "days_back": 7,
+            "apps": ["com.test.app"],
+            "countries": ["us"],
+            "languages": ["en"],
+            "max_reviews_per_app": 250,
+            "keywords": ["battery"],
+        },
+        "reddit": {
+            "enabled": False,
+            "days_back": 14,
+            "communities": ["Android"],
+            "keywords": ["sleep"],
+        },
+    }
+
+    write_runtime_platform_overrides(overrides)
+    loaded = load_raw_platforms(runtime_path)
+
+    assert loaded["reddit"] == {
+        "communities": ["Android"],
+        "days_back": 14,
+        "enabled": False,
+        "keywords": ["sleep"],
+    }
+    assert loaded["google_play"] == {
+        "apps": ["com.test.app"],
+        "countries": ["us"],
+        "days_back": 7,
+        "enabled": True,
+        "keywords": ["battery"],
+        "languages": ["en"],
+        "max_reviews_per_app": 250,
+    }
