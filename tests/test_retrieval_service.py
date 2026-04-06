@@ -315,3 +315,131 @@ def test_search_documents_supports_multi_source_and_web_domain_filters() -> None
         offset=0,
     )
     assert [row["external_id"] for row in narrowed_results] == ["web-doc-a"]
+
+
+def test_search_documents_empty_query_no_fts_match() -> None:
+    session = _build_session()
+    service = RetrievalService(session)
+
+    source_id = int(
+        session.execute(
+            text(
+                """
+                INSERT INTO sources (platform, external_id, name, metadata_json)
+                VALUES ('reddit', 'reddit', 'reddit', '{}')
+                """
+            )
+        ).lastrowid
+    )
+    session.execute(
+        text(
+            """
+            INSERT INTO documents (source_id, external_id, title, body, published_at, raw_json)
+            VALUES (:source_id, 'newest', 'Recent doc', 'anything', '2026-03-20T00:00:00', '{"subreddit":"android"}')
+            """
+        ),
+        {"source_id": source_id},
+    )
+    session.execute(
+        text(
+            """
+            INSERT INTO documents (source_id, external_id, title, body, published_at, raw_json)
+            VALUES (:source_id, 'older', 'Older doc', 'anything', '2026-03-01T00:00:00', '{"subreddit":"android"}')
+            """
+        ),
+        {"source_id": source_id},
+    )
+    session.commit()
+
+    results = service.search_documents(query="", filters={"subreddit": "android"}, limit=20, offset=0)
+    assert [row["external_id"] for row in results] == ["newest", "older"]
+    assert all(row["fts_score"] is None for row in results)
+
+
+def test_search_documents_wildcard_query_does_not_crash() -> None:
+    session = _build_session()
+    service = RetrievalService(session)
+
+    source_id = int(
+        session.execute(
+            text(
+                """
+                INSERT INTO sources (platform, external_id, name, metadata_json)
+                VALUES ('reddit', 'reddit', 'reddit', '{}')
+                """
+            )
+        ).lastrowid
+    )
+    session.execute(
+        text(
+            """
+            INSERT INTO documents (source_id, external_id, title, body, published_at, raw_json)
+            VALUES (:source_id, 'a', 'Any title', 'Any body', '2026-03-20T00:00:00', '{"subreddit":"android"}')
+            """
+        ),
+        {"source_id": source_id},
+    )
+    session.commit()
+
+    results = service.search_documents(query="*", filters={"subreddit": "android"}, limit=20, offset=0)
+    assert [row["external_id"] for row in results] == ["a"]
+
+
+def test_search_documents_valid_query_still_uses_fts() -> None:
+    session = _build_session()
+    service = RetrievalService(session)
+
+    source_id = int(
+        session.execute(
+            text(
+                """
+                INSERT INTO sources (platform, external_id, name, metadata_json)
+                VALUES ('reddit', 'reddit', 'reddit', '{}')
+                """
+            )
+        ).lastrowid
+    )
+    session.execute(
+        text(
+            """
+            INSERT INTO documents (source_id, external_id, title, body, published_at, raw_json)
+            VALUES (:source_id, 'battery-doc', 'Battery issue', 'battery drains overnight', '2026-03-20T00:00:00', '{"subreddit":"android"}')
+            """
+        ),
+        {"source_id": source_id},
+    )
+    session.commit()
+
+    results = service.search_documents(query="battery", filters={"subreddit": "android"}, limit=20, offset=0)
+    assert len(results) == 1
+    assert results[0]["external_id"] == "battery-doc"
+    assert results[0]["fts_score"] is not None
+
+
+def test_retrieve_for_question_empty_query_does_not_raise() -> None:
+    session = _build_session()
+    service = RetrievalService(session)
+
+    source_id = int(
+        session.execute(
+            text(
+                """
+                INSERT INTO sources (platform, external_id, name, metadata_json)
+                VALUES ('reddit', 'reddit', 'reddit', '{}')
+                """
+            )
+        ).lastrowid
+    )
+    session.execute(
+        text(
+            """
+            INSERT INTO documents (source_id, external_id, title, body, published_at, raw_json)
+            VALUES (:source_id, 'ask-flow', 'Ask doc', 'evidence text', '2026-03-20T00:00:00', '{"subreddit":"android"}')
+            """
+        ),
+        {"source_id": source_id},
+    )
+    session.commit()
+
+    results = service.retrieve_for_question(question="", filters={"subreddit": "android"}, limit=10)
+    assert [row["external_id"] for row in results] == ["ask-flow"]

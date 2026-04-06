@@ -17,8 +17,7 @@ def _search(query: str, filters: dict[str, Any], limit: int, offset: int) -> lis
     session = SessionLocal()
     try:
         service = RetrievalService(session)
-        safe_query = query.strip() or "*"
-        return service.search_documents(query=safe_query, filters=filters, limit=limit, offset=offset)
+        return service.search_documents(query=query.strip(), filters=filters, limit=limit, offset=offset)
     finally:
         session.close()
 

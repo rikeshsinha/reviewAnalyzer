@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy import text
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 
@@ -35,6 +36,34 @@ class RetrievalService:
         safe_offset = max(0, offset)
         filters = filters or {}
 
+        normalized_query = (query or "").strip()
+        if not normalized_query:
+            return self._search_documents_without_fts(filters=filters, limit=safe_limit, offset=safe_offset)
+
+        return self._search_documents_with_fts(
+            query=normalized_query,
+            filters=filters,
+            limit=safe_limit,
+            offset=safe_offset,
+        )
+
+    def retrieve_for_question(
+        self,
+        question: str,
+        filters: dict[str, Any] | None = None,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        """Return top candidate documents for a user question."""
+
+        return self.search_documents(query=question, filters=filters, limit=limit, offset=0)
+
+    def _search_documents_with_fts(
+        self,
+        query: str,
+        filters: dict[str, Any],
+        limit: int,
+        offset: int,
+    ) -> list[dict[str, Any]]:
         parts = self._build_metadata_filters(filters)
 
         sql = f"""
@@ -63,25 +92,59 @@ class RetrievalService:
             ORDER BY fts_score ASC, datetime(COALESCE(d.published_at, d.created_at)) DESC, d.id DESC
             LIMIT :limit OFFSET :offset
         """
-
         params = {
             **parts.params,
             "query": query,
-            "limit": safe_limit,
-            "offset": safe_offset,
+            "limit": limit,
+            "offset": offset,
         }
+        try:
+            result = self.session.execute(text(sql), params)
+            return [dict(row._mapping) for row in result.fetchall()]
+        except OperationalError:
+            sanitized_query = self._sanitize_fts_query(query)
+            if not sanitized_query:
+                return self._search_documents_without_fts(filters=filters, limit=limit, offset=offset)
+            try:
+                retry_result = self.session.execute(text(sql), {**params, "query": sanitized_query})
+                return [dict(row._mapping) for row in retry_result.fetchall()]
+            except OperationalError:
+                return []
+
+    def _search_documents_without_fts(
+        self,
+        filters: dict[str, Any],
+        limit: int,
+        offset: int,
+    ) -> list[dict[str, Any]]:
+        parts = self._build_metadata_filters(filters)
+        sql = f"""
+            SELECT
+                d.id,
+                d.source_id,
+                d.external_id,
+                d.title,
+                d.body,
+                d.author,
+                d.url,
+                d.published_at,
+                d.raw_json,
+                d.created_at,
+                NULL AS fts_score
+            FROM documents d
+            {' '.join(parts.joins)}
+            WHERE 1=1
+              {' '.join(parts.where)}
+            ORDER BY datetime(COALESCE(d.published_at, d.created_at)) DESC, d.id DESC
+            LIMIT :limit OFFSET :offset
+        """
+        params = {**parts.params, "limit": limit, "offset": offset}
         result = self.session.execute(text(sql), params)
         return [dict(row._mapping) for row in result.fetchall()]
 
-    def retrieve_for_question(
-        self,
-        question: str,
-        filters: dict[str, Any] | None = None,
-        limit: int = 10,
-    ) -> list[dict[str, Any]]:
-        """Return top candidate documents for a user question."""
-
-        return self.search_documents(query=question, filters=filters, limit=limit, offset=0)
+    def _sanitize_fts_query(self, query: str) -> str:
+        sanitized_terms = [token for token in query.replace("*", " ").replace('"', " ").split() if token]
+        return " ".join(sanitized_terms).strip()
 
     def get_documents_by_ids(self, ids: list[int]) -> list[dict[str, Any]]:
         """Fetch documents by ids while preserving caller-specified order."""
