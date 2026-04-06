@@ -30,6 +30,7 @@ def _reset_settings(monkeypatch):
         "PUBLIC_REDDIT_MAX_PAGES",
         "PUBLIC_REDDIT_DELAY_SECONDS",
         "PUBLIC_REDDIT_INCLUDE_RECENT_WHEN_NO_KEYWORD_HITS",
+        "RUNTIME_SOURCE_CONFIG_PATH",
     ):
         monkeypatch.delenv(env_name, raising=False)
     _clear_settings_caches()
@@ -62,3 +63,12 @@ def test_blank_reddit_user_agent_uses_default(monkeypatch) -> None:
     settings = settings_module.get_ingestion_settings()
 
     assert settings.reddit_user_agent == "reviewAnalyzer/0.1"
+
+
+def test_runtime_source_config_path_uses_default_and_env_override(monkeypatch) -> None:
+    default_settings = settings_module.get_ingestion_settings()
+    assert default_settings.runtime_source_config_path == "data/runtime_source_config.yaml"
+
+    monkeypatch.setenv("RUNTIME_SOURCE_CONFIG_PATH", "data/runtime_overrides/custom_source_config.yaml")
+    overridden = settings_module.get_ingestion_settings()
+    assert overridden.runtime_source_config_path == "data/runtime_overrides/custom_source_config.yaml"
