@@ -101,11 +101,13 @@ def _load_dashboard_data(filters: dict[str, Any]) -> dict[str, Any]:
         complaints_rows = session.execute(
             text(
                 f"""
-                SELECT dt.tag_value AS issue, COUNT(*) AS mentions
+                SELECT
+                    COALESCE(json_extract(e.metadata_json, '$.primary_issue_category'), 'other') AS issue,
+                    COUNT(*) AS mentions
                 FROM documents d
-                JOIN document_tags dt ON dt.document_id = d.id AND dt.tag_type = 'issue'
+                JOIN enrichments e ON e.document_id = d.id
                 WHERE 1=1 {where_sql}
-                GROUP BY dt.tag_value
+                GROUP BY issue
                 ORDER BY mentions DESC
                 LIMIT 8
                 """
@@ -163,7 +165,7 @@ def render(filters: dict[str, Any]) -> None:
     with left:
         st.markdown("#### Top complaints")
         if complaints_df.empty:
-            st.info("No complaint tags matched these filters yet.")
+            st.info("No complaint categories matched these filters yet.")
         else:
             st.dataframe(complaints_df, use_container_width=True)
 
@@ -172,7 +174,20 @@ def render(filters: dict[str, Any]) -> None:
         st.markdown("#### Sentiment split")
         if not sentiment_df.empty:
             st.plotly_chart(
-                px.pie(sentiment_df, values="count", names="sentiment", title="Sentiment distribution"),
+                px.pie(
+                    sentiment_df,
+                    values="count",
+                    names="sentiment",
+                    title="Sentiment distribution",
+                    color="sentiment",
+                    color_discrete_map={
+                        "positive": "#2E7D32",   # green
+                        "negative": "#C62828",   # red
+                        "neutral": "#1565C0",    # blue
+                        "mixed": "#81C784",      # light green
+                        "unknown": "#9E9E9E",    # gray fallback
+                    },
+                ),
                 use_container_width=True,
             )
         else:

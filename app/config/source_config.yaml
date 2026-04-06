@@ -18,3 +18,20 @@ platforms:
     languages: ["en"]
     max_reviews_per_app: 1000
     keywords: []
+  web_reviews:
+    enabled: true
+    sites: [
+      "wareable.com",
+      "androidcentral.com",
+      "tomsguide.com",
+      "techradar.com",
+      "trustedreviews.com",
+      "stuff.tv",
+      "phonearena.com",
+      "theverge.com",
+      "digitaltrends.com",
+      "sammobile.com"
+    ]
+    keywords: ["Samsung Health", "Galaxy Watch", "Galaxy Ring", "sleep", "workout"]
+    max_pages_per_site: 50
+    days_back: 30

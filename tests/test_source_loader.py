@@ -44,6 +44,30 @@ platforms:
     assert google_play.config["max_reviews_per_app"] == 250
 
 
+def test_load_source_config_supports_block_style_lists(tmp_path: Path) -> None:
+    config_path = tmp_path / "source_config.yaml"
+    config_path.write_text(
+        """
+platforms:
+  reddit:
+    enabled: true
+    communities:
+      - GalaxyWatch
+      - samsung
+    keywords:
+      - Samsung Health
+      - sleep
+    days_back: 30
+""".strip(),
+        encoding="utf-8",
+    )
+
+    configs = load_source_config(config_path)
+    reddit = next(config for config in configs if config.platform == "reddit")
+    assert reddit.config["subreddits"] == ["GalaxyWatch", "samsung"]
+    assert reddit.config["keywords"] == ["Samsung Health", "sleep"]
+
+
 def test_get_enabled_platform_configs_filters_disabled(tmp_path: Path) -> None:
     config_path = tmp_path / "source_config.yaml"
     config_path.write_text(

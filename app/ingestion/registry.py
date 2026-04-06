@@ -7,11 +7,14 @@ from typing import Type
 from app.ingestion.base import BaseIngestionAdapter
 from app.ingestion.google_play_ingestor import GooglePlayIngestor
 from app.ingestion.reddit_ingestor import RedditIngestor
+from app.ingestion.web_reviews_ingestor import WebReviewsIngestor
 
 INGESTION_ADAPTERS: dict[str, Type[BaseIngestionAdapter]] = {
     "reddit": RedditIngestor,
     "google_play": GooglePlayIngestor,
     "google-play": GooglePlayIngestor,
+    "web_reviews": WebReviewsIngestor,
+    "web-review": WebReviewsIngestor,
     "app_store": RedditIngestor,
     "youtube": RedditIngestor,
 }

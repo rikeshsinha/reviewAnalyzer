@@ -93,3 +93,27 @@ def test_refresh_sources_fail_fast(monkeypatch) -> None:
         refresh_sources.run()
 
     assert calls == ["reddit"]
+
+
+def test_refresh_sources_filters_by_selected_platforms(monkeypatch) -> None:
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        refresh_sources,
+        "get_enabled_platform_configs",
+        lambda: [
+            PlatformSourceConfig(platform="reddit", enabled=True, days_back=30, config={"subreddits": ["a"]}),
+            PlatformSourceConfig(platform="google_play", enabled=True, days_back=7, config={"apps": ["com.app"]}),
+        ],
+    )
+
+    monkeypatch.setattr(
+        refresh_sources,
+        "run_for_platform",
+        lambda platform, config, days_back: calls.append(platform),
+    )
+    monkeypatch.setenv("INGESTION_PLATFORMS", "reddit")
+
+    refresh_sources.run()
+
+    assert calls == ["reddit"]

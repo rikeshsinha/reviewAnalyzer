@@ -19,6 +19,13 @@ def _should_fail_fast() -> bool:
     return raw_value in {"1", "true", "yes", "on"}
 
 
+def _selected_platforms() -> set[str] | None:
+    raw_value = (os.getenv("INGESTION_PLATFORMS") or "").strip()
+    if not raw_value:
+        return None
+    return {item.strip().lower() for item in raw_value.split(",") if item.strip()}
+
+
 def run() -> None:
     """Run ingestion for each enabled platform from source config."""
 
@@ -26,6 +33,18 @@ def run() -> None:
     enabled_configs = get_enabled_platform_configs()
     if not enabled_configs:
         raise RuntimeError("No enabled platforms found in merged source configuration")
+
+    selected_platforms = _selected_platforms()
+    if selected_platforms is not None:
+        enabled_configs = [
+            platform_config
+            for platform_config in enabled_configs
+            if platform_config.platform.lower() in selected_platforms
+        ]
+        if not enabled_configs:
+            raise RuntimeError(
+                "No enabled platforms match INGESTION_PLATFORMS selection"
+            )
 
     fail_fast = _should_fail_fast()
     failures: list[str] = []

@@ -8,7 +8,6 @@ from pathlib import Path
 import re
 from typing import Any
 
-
 BASE_SOURCE_CONFIG_PATH = Path(__file__).resolve().parent / "source_config.yaml"
 RUNTIME_SOURCE_CONFIG_PATH = Path("data/runtime_source_config.yaml")
 logger = logging.getLogger(__name__)
@@ -30,6 +29,59 @@ class SourceConfigError(ValueError):
     """Raised when source configuration shape is invalid."""
 
 
+def _parse_source_yaml(text: str) -> dict[str, dict[str, Any]]:
+    platforms: dict[str, dict[str, Any]] = {}
+    in_platforms_block = False
+    current_platform: str | None = None
+    current_list_key: str | None = None
+
+    for line_no, raw_line in enumerate(text.splitlines(), start=1):
+        if not raw_line.strip() or raw_line.strip().startswith("#"):
+            continue
+
+        indent = len(raw_line) - len(raw_line.lstrip(" "))
+        line = raw_line.strip()
+
+        if indent == 0 and line == "platforms:":
+            in_platforms_block = True
+            current_platform = None
+            current_list_key = None
+            continue
+
+        if not in_platforms_block:
+            raise SourceConfigError(f"line {line_no}: expected top-level 'platforms:' block")
+
+        if indent == 2 and line.endswith(":"):
+            current_platform = line[:-1].strip().lower()
+            if not current_platform:
+                raise SourceConfigError(f"line {line_no}: platform key cannot be empty")
+            platforms[current_platform] = {}
+            current_list_key = None
+            continue
+
+        if indent == 4 and current_platform and ":" in line:
+            key, raw_value = line.split(":", 1)
+            parsed_key = key.strip()
+            parsed_value = raw_value.strip()
+            if parsed_value:
+                platforms[current_platform][parsed_key] = _parse_scalar(parsed_value)
+                current_list_key = None
+            else:
+                platforms[current_platform][parsed_key] = []
+                current_list_key = parsed_key
+            continue
+
+        if indent == 6 and current_platform and current_list_key and line.startswith("-"):
+            item_value = line[1:].strip()
+            if item_value:
+                platforms[current_platform][current_list_key].append(_parse_scalar(item_value))
+            continue
+
+        raise SourceConfigError(f"line {line_no}: unsupported YAML structure")
+
+    return platforms
+
+
 def _parse_scalar(value: str) -> Any:
     value = value.strip()
     lowered = value.lower()
@@ -48,43 +100,6 @@ def _parse_scalar(value: str) -> Any:
                 items.append(item)
         return items
     return value.strip('"').strip("'")
-
-
-def _parse_source_yaml(text: str) -> dict[str, dict[str, Any]]:
-    platforms: dict[str, dict[str, Any]] = {}
-    in_platforms_block = False
-    current_platform: str | None = None
-
-    for line_no, raw_line in enumerate(text.splitlines(), start=1):
-        if not raw_line.strip() or raw_line.strip().startswith("#"):
-            continue
-
-        indent = len(raw_line) - len(raw_line.lstrip(" "))
-        line = raw_line.strip()
-
-        if indent == 0 and line == "platforms:":
-            in_platforms_block = True
-            current_platform = None
-            continue
-
-        if not in_platforms_block:
-            raise SourceConfigError(f"line {line_no}: expected top-level 'platforms:' block")
-
-        if indent == 2 and line.endswith(":"):
-            current_platform = line[:-1].strip().lower()
-            if not current_platform:
-                raise SourceConfigError(f"line {line_no}: platform key cannot be empty")
-            platforms[current_platform] = {}
-            continue
-
-        if indent == 4 and current_platform and ":" in line:
-            key, raw_value = line.split(":", 1)
-            platforms[current_platform][key.strip()] = _parse_scalar(raw_value)
-            continue
-
-        raise SourceConfigError(f"line {line_no}: unsupported YAML structure")
-
-    return platforms
 
 
 def _normalize_string_list(value: Any, *, field_name: str, platform: str) -> list[str]:
@@ -150,6 +165,17 @@ def _normalize_platform_config(platform: str, raw: dict[str, Any]) -> PlatformSo
         normalized["countries"] = countries
         normalized["languages"] = languages
         normalized["max_reviews_per_app"] = max_reviews_per_app
+    elif platform == "web_reviews":
+        sites = _normalize_string_list(raw.get("sites", []), field_name="sites", platform=platform)
+        if enabled and not sites:
+            raise SourceConfigError("platform 'web_reviews' requires non-empty 'sites' when enabled")
+        max_pages_per_site = raw.get("max_pages_per_site", 50)
+        if not isinstance(max_pages_per_site, int) or max_pages_per_site <= 0:
+            raise SourceConfigError(
+                "platform 'web_reviews' field 'max_pages_per_site' must be a positive integer"
+            )
+        normalized["sites"] = sites
+        normalized["max_pages_per_site"] = max_pages_per_site
     else:
         for key, value in raw.items():
             if key in {"enabled", "days_back", "keywords"}:
