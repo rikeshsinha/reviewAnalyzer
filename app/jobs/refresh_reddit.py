@@ -230,14 +230,23 @@ def _run_pushshift_ingestion(
 
     for subreddit in subreddits:
         for query in query_terms:
-            submissions = search_submissions(
-                subreddit=subreddit,
-                query=query,
-                after=after,
-                before=before,
-                size=post_limit,
-                base_url=base_url,
-            )
+            try:
+                submissions = search_submissions(
+                    subreddit=subreddit,
+                    query=query,
+                    after=after,
+                    before=before,
+                    size=post_limit,
+                    base_url=base_url,
+                )
+            except (PushshiftError, requests.RequestException) as exc:
+                logger.warning(
+                    "Pushshift fetch failed for subreddit/query pair",
+                    extra={"subreddit": subreddit, "query": query, "error": str(exc)},
+                )
+                raise PushshiftError(
+                    f"pushshift query failed for r/{subreddit} :: {query or '(blank)'} ({exc})"
+                ) from exc
             for raw_submission in submissions:
                 normalized = normalize_pushshift_submission(raw_submission)
                 external_id = normalized.get("external_id")

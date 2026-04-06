@@ -242,6 +242,18 @@ Behavior:
 6. Click **Refresh Web Reviews**.
 7. Verify status in **Recent ingestion runs** and **Ingestion run metrics by platform**.
 
+### Admin source selector for refresh
+
+- In **Admin → Combined ingestion refresh**, use **Sources to refresh** to pick one or more enabled platforms (`reddit`, `google_play`, `web_reviews`, etc.).
+- Clicking **Refresh selected sources** runs `app.jobs.refresh_sources` with `INGESTION_PLATFORMS` set to the selected comma-separated values.
+- The Admin page shows the selected source list in success/failure output so operators can verify exactly which sources were executed.
+
+Selection mapping details:
+
+- `INGESTION_PLATFORMS=reddit` → only enabled `reddit` runs.
+- `INGESTION_PLATFORMS=reddit,web_reviews` → only those enabled platforms run.
+- If selected platforms have no enabled match, the refresh job exits with a clear configuration mismatch error.
+
 ### Date range usage
 
 - CLI supports `--date-from` and `--date-to` in `YYYY-MM-DD`, inclusive.
@@ -397,12 +409,20 @@ PUSHSHIFT_MAX_PAGES = "20"
 - Increase `days_back` in source config.
 - Temporarily broaden keywords.
 - Confirm Pushshift endpoint is reachable and returning data.
+- Check Admin **Ingestion diagnostics** for backend failover events and failed/empty `(subreddit, keyword)` pairs.
+- For Pushshift mode, fallback remains `pushshift -> public_json`; if both return zero docs, the run is marked failed with diagnostics.
 
 ### D) Auth/key failures
 
 - `OPENAI_API_KEY` missing/invalid → enrichment fails.
 - Reddit OAuth vars missing/invalid → PRAW fallback fails.
 - Fix `.env`, then rerun ingestion/enrichment jobs.
+
+### E) `SourceConfigError` (source YAML parsing/validation)
+
+- Ensure YAML starts with a `platforms:` mapping.
+- List fields support both inline lists (`["a", "b"]`) and block-style lists (`- a` / `- b`).
+- Validation errors include platform + field names; fix the referenced field and rerun refresh.
 
 ---
 

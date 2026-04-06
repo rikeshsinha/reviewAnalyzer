@@ -119,3 +119,39 @@ def test_run_platform_refresh_routes_web_reviews_to_dedicated_job(monkeypatch) -
     refresh_sources._run_platform_refresh("web_reviews", {"sites": ["example.com"]}, 14)
 
     assert web_calls == [({"sites": ["example.com"]}, 14)]
+
+
+def test_refresh_sources_filters_by_selected_platforms(monkeypatch) -> None:
+    calls: list[str] = []
+    monkeypatch.setattr(
+        refresh_sources,
+        "get_enabled_platform_configs",
+        lambda: [
+            PlatformSourceConfig(platform="reddit", enabled=True, days_back=30, config={"subreddits": ["a"]}),
+            PlatformSourceConfig(platform="google_play", enabled=True, days_back=7, config={"apps": ["com.app"]}),
+        ],
+    )
+    monkeypatch.setattr(
+        refresh_sources,
+        "_run_platform_refresh",
+        lambda platform, config, days_back: calls.append(platform),
+    )
+    monkeypatch.setenv("INGESTION_PLATFORMS", "google_play")
+
+    refresh_sources.run()
+
+    assert calls == ["google_play"]
+
+
+def test_refresh_sources_selected_platforms_without_enabled_match_raises(monkeypatch) -> None:
+    monkeypatch.setattr(
+        refresh_sources,
+        "get_enabled_platform_configs",
+        lambda: [
+            PlatformSourceConfig(platform="reddit", enabled=True, days_back=30, config={"subreddits": ["a"]}),
+        ],
+    )
+    monkeypatch.setenv("INGESTION_PLATFORMS", "google_play")
+
+    with pytest.raises(RuntimeError, match="No enabled platforms matched INGESTION_PLATFORMS"):
+        refresh_sources.run()

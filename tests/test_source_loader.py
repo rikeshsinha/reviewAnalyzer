@@ -242,6 +242,64 @@ platforms:
     assert web_reviews.config["prioritize_keywords"] is False
 
 
+def test_load_source_config_supports_block_style_lists(tmp_path: Path) -> None:
+    config_path = tmp_path / "source_config.yaml"
+    config_path.write_text(
+        """
+platforms:
+  reddit:
+    enabled: true
+    communities:
+      - GalaxyWatch
+      - Android
+    keywords:
+      - sleep
+      - workout
+""".strip(),
+        encoding="utf-8",
+    )
+
+    configs = load_source_config(config_path)
+    reddit = next(config for config in configs if config.platform == "reddit")
+
+    assert reddit.config["subreddits"] == ["GalaxyWatch", "Android"]
+    assert reddit.config["keywords"] == ["sleep", "workout"]
+
+
+def test_load_source_config_handles_runtime_with_missing_optional_sections(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    base_path = tmp_path / "source_config.yaml"
+    runtime_path = tmp_path / "runtime_source_config.yaml"
+
+    base_path.write_text(
+        """
+platforms:
+  reddit:
+    enabled: true
+    communities: ["BaseOnly"]
+    keywords: ["base_keyword"]
+""".strip(),
+        encoding="utf-8",
+    )
+    runtime_path.write_text(
+        """
+platforms:
+  reddit:
+""".strip(),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(source_loader, "BASE_SOURCE_CONFIG_PATH", base_path)
+    monkeypatch.setattr(source_loader, "RUNTIME_SOURCE_CONFIG_PATH", runtime_path)
+
+    configs = load_source_config()
+    reddit = next(config for config in configs if config.platform == "reddit")
+
+    assert reddit.config["subreddits"] == ["BaseOnly"]
+    assert reddit.config["keywords"] == ["base_keyword"]
+
+
 def test_load_source_config_ignores_unknown_runtime_platforms(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:

@@ -28,6 +28,21 @@ def _run_platform_refresh(platform: str, config: dict[str, object], days_back: i
     run_for_platform(platform=platform, config=config, days_back=days_back)
 
 
+def _get_selected_platforms() -> list[str]:
+    raw_value = (os.getenv("INGESTION_PLATFORMS") or "").strip()
+    if not raw_value:
+        return []
+    selected: list[str] = []
+    seen: set[str] = set()
+    for chunk in raw_value.split(","):
+        platform = chunk.strip().lower()
+        if not platform or platform in seen:
+            continue
+        seen.add(platform)
+        selected.append(platform)
+    return selected
+
+
 def run() -> None:
     """Run ingestion for each enabled platform from source config."""
 
@@ -36,6 +51,15 @@ def run() -> None:
     enabled_configs = get_enabled_platform_configs()
     if not enabled_configs:
         raise RuntimeError("No enabled platforms found in merged source configuration")
+    selected_platforms = _get_selected_platforms()
+    if selected_platforms:
+        enabled_configs = [cfg for cfg in enabled_configs if cfg.platform in selected_platforms]
+        if not enabled_configs:
+            raise RuntimeError(
+                "No enabled platforms matched INGESTION_PLATFORMS="
+                + ",".join(selected_platforms)
+                + ". Enable one of the selected platforms in source config or adjust the selection."
+            )
 
     fail_fast = _should_fail_fast()
     failures: list[str] = []
