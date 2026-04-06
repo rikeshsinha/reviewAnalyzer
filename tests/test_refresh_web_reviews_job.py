@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
@@ -43,13 +44,17 @@ def test_run_for_web_reviews_persists_docs_and_run_stats(monkeypatch) -> None:
             ]
 
         def fetch_articles(self, article_urls: list[str]) -> dict[str, str]:
+            recent_date_a = (datetime.now(tz=timezone.utc) - timedelta(days=1)).isoformat().replace("+00:00", "Z")
+            recent_date_b = (datetime.now(tz=timezone.utc) - timedelta(days=2)).isoformat().replace("+00:00", "Z")
             return {
                 article_urls[0]: (
                     "<html><head><title>Galaxy Watch 8 Review</title></head>"
+                    f"<meta property='article:published_time' content='{recent_date_a}'/>"
                     "<body><article><p>" + ("Great battery life. " * 80) + "</p></article></body></html>"
                 ),
                 article_urls[1]: (
                     "<html><head><title>Galaxy Watch 8 Review</title></head>"
+                    f"<meta property='article:published_time' content='{recent_date_b}'/>"
                     "<body><article><p>" + ("Great battery life. " * 80) + "</p></article></body></html>"
                 ),
             }
@@ -85,3 +90,48 @@ def test_run_for_web_reviews_persists_docs_and_run_stats(monkeypatch) -> None:
     assert run_row.status == "completed"
     assert run_row.records_fetched == 2
     assert run_row.records_inserted == 1
+
+
+def test_run_for_web_reviews_honors_explicit_date_range(monkeypatch) -> None:
+    session = _build_session()
+    monkeypatch.setattr(refresh_web_reviews, "SessionLocal", lambda: session)
+
+    class _FakeClient:
+        def discover_candidate_article_urls(self, *, homepage_url: str, category_urls: list[str] | None = None) -> list[str]:
+            del category_urls
+            return [
+                f"{homepage_url}/reviews/in-range-review",
+                f"{homepage_url}/reviews/out-of-range-review",
+            ]
+
+        def fetch_articles(self, article_urls: list[str]) -> dict[str, str]:
+            return {
+                article_urls[0]: (
+                    "<html><head><title>In Range Review</title>"
+                    "<meta property='article:published_time' content='2026-03-02T12:00:00Z'/></head>"
+                    "<body><article><p>" + ("In range review text. " * 80) + "</p></article></body></html>"
+                ),
+                article_urls[1]: (
+                    "<html><head><title>Out of Range Review</title>"
+                    "<meta property='article:published_time' content='2026-02-01T12:00:00Z'/></head>"
+                    "<body><article><p>" + ("Out of range review text. " * 80) + "</p></article></body></html>"
+                ),
+            }
+
+    monkeypatch.setattr(refresh_web_reviews, "WebReviewsClient", lambda: _FakeClient())
+
+    stats = refresh_web_reviews.run_for_web_reviews(
+        {
+            "sites": ["example.com"],
+            "max_pages_per_site": 10,
+            "min_content_chars": 500,
+        },
+        days_back=365,
+        date_from="2026-03-01",
+        date_to="2026-03-03",
+    )
+
+    assert stats["records_fetched"] == 2
+    assert stats["records_inserted"] == 1
+    inserted_external_ids = session.execute(text("SELECT external_id FROM documents")).scalars().all()
+    assert inserted_external_ids == ["https://example.com/reviews/in-range-review"]

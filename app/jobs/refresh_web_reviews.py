@@ -101,14 +101,14 @@ def _resolve_ingestion_window(
 
 def _is_within_window(created_at: str | None, start: datetime, end: datetime) -> bool:
     if not created_at:
-        return True
+        return False
     parsed_text = str(created_at).strip()
     if parsed_text.endswith("Z"):
         parsed_text = f"{parsed_text[:-1]}+00:00"
     try:
         parsed_dt = datetime.fromisoformat(parsed_text)
     except ValueError:
-        return True
+        return False
     if parsed_dt.tzinfo is None:
         parsed_dt = parsed_dt.replace(tzinfo=timezone.utc)
     normalized = parsed_dt.astimezone(timezone.utc)
