@@ -16,12 +16,25 @@ def _where_clause(filters: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     where_parts: list[str] = []
     params: dict[str, Any] = {}
 
-    if filters.get("source"):
+    sources = [str(item).strip() for item in (filters.get("sources") or []) if str(item).strip()]
+    if sources:
+        placeholders: list[str] = []
+        for idx, source_name in enumerate(sources):
+            key = f"source_{idx}"
+            params[key] = source_name
+            placeholders.append(f":{key}")
+        where_parts.append(
+            f"AND EXISTS (SELECT 1 FROM sources s WHERE s.id = d.source_id AND s.name IN ({', '.join(placeholders)}))"
+        )
+    elif filters.get("source"):
         where_parts.append("AND EXISTS (SELECT 1 FROM sources s WHERE s.id = d.source_id AND s.name = :source)")
         params["source"] = filters["source"]
     if filters.get("subreddit"):
         where_parts.append("AND json_extract(d.raw_json, '$.subreddit') = :subreddit")
         params["subreddit"] = filters["subreddit"]
+    if filters.get("web_domain"):
+        where_parts.append("AND json_extract(d.raw_json, '$.community_or_channel') = :web_domain")
+        params["web_domain"] = filters["web_domain"]
     if filters.get("google_play_app"):
         where_parts.append("AND json_extract(d.raw_json, '$.community_or_channel') = :google_play_app")
         params["google_play_app"] = filters["google_play_app"]

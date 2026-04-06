@@ -34,13 +34,16 @@ def _filter_label(filters: dict[str, Any]) -> str:
 
 
 def _coverage_label(filters: dict[str, Any]) -> str:
-    source = (filters.get("source") or "").strip().lower()
-    if source == "reddit":
-        selected = "Reddit"
-    elif source == "google_play":
-        selected = "Google Play"
-    else:
-        selected = "Reddit / Google Play"
+    source_display = {
+        "reddit": "Reddit",
+        "web_reviews": "Web Reviews",
+        "google_play": "Google Play",
+    }
+    selected_sources = [str(item).strip().lower() for item in (filters.get("sources") or []) if str(item).strip()]
+    if not selected_sources and filters.get("source"):
+        selected_sources = [str(filters["source"]).strip().lower()]
+    labels = [source_display[source] for source in selected_sources if source in source_display]
+    selected = " / ".join(labels) if labels else "All sources"
     return f"Based on selected sources: {selected}"
 
 

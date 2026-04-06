@@ -23,6 +23,7 @@ def _get_filter_options() -> dict[str, list[str]]:
         "max_date": [""],
         "source": [],
         "subreddit": [],
+        "web_domain": [],
         "google_play_app": [],
         "rating": [],
         "product": [],
@@ -80,6 +81,19 @@ def _get_filter_options() -> dict[str, list[str]]:
                 )
             ).fetchall()
 
+            web_domain_rows = session.execute(
+                text(
+                    """
+                    SELECT DISTINCT json_extract(d.raw_json, '$.community_or_channel') AS web_domain
+                    FROM documents d
+                    JOIN sources s ON s.id = d.source_id
+                    WHERE s.name = 'web_reviews'
+                      AND json_extract(d.raw_json, '$.community_or_channel') IS NOT NULL
+                    ORDER BY web_domain
+                    """
+                )
+            ).fetchall()
+
             google_play_app_rows = session.execute(
                 text(
                     """
@@ -112,6 +126,7 @@ def _get_filter_options() -> dict[str, list[str]]:
                 "max_date": [str(date_bounds_row.max_date) if date_bounds_row and date_bounds_row.max_date else ""],
                 "source": [str(row.source_name) for row in source_rows if row.source_name],
                 "subreddit": [str(row.subreddit) for row in subreddit_rows if row.subreddit],
+                "web_domain": [str(row.web_domain) for row in web_domain_rows if row.web_domain],
                 "google_play_app": [str(row.app_id) for row in google_play_app_rows if row.app_id],
                 "rating": [str(row.rating) for row in rating_rows if row.rating],
                 "product": _distinct_tag_values("product"),
@@ -148,22 +163,45 @@ def _build_sidebar_filters() -> dict[str, Any]:
         date_from, date_to = default_date_from, default_date_to
 
     source_label_to_value = {
-        "All": None,
         "Reddit": "reddit",
+        "Web Reviews": "web_reviews",
         "Google Play": "google_play",
     }
     available_source_values = set(options["source"])
-    source_labels = ["All"] + [
+    source_labels = [
         label for label, value in source_label_to_value.items() if value and value in available_source_values
     ]
-    source_label = st.sidebar.selectbox("Source", options=source_labels)
-    source = source_label_to_value.get(source_label)
-    subreddit = st.sidebar.selectbox("Subreddit", options=["All"] + options["subreddit"])
+
+    preferred_default_sources = ["reddit", "web_reviews"]
+    default_source_values = [source for source in preferred_default_sources if source in available_source_values]
+    if not default_source_values:
+        default_source_values = list(available_source_values)
+    default_source_labels = [
+        label for label, value in source_label_to_value.items() if value in default_source_values
+    ]
+
+    selected_source_labels = st.sidebar.multiselect(
+        "Sources",
+        options=source_labels,
+        default=default_source_labels,
+    )
+    selected_sources = [source_label_to_value[label] for label in selected_source_labels if label in source_label_to_value]
+    if not selected_sources:
+        selected_sources = sorted(available_source_values)
+
+    subreddit = None
+    if "reddit" in selected_sources:
+        subreddit = st.sidebar.selectbox("Subreddit", options=["All"] + options["subreddit"])
+
+    web_domain = None
+    if "web_reviews" in selected_sources:
+        web_domain = st.sidebar.selectbox("Site / domain", options=["All"] + options["web_domain"])
+
     google_play_app = None
-    if source == "google_play":
+    if "google_play" in selected_sources:
         google_play_app = st.sidebar.selectbox("Google Play app/package", options=["All"] + options["google_play_app"])
     rating = "All"
-    if source != "reddit":
+    if "google_play" in selected_sources:
         rating = st.sidebar.selectbox("Rating (1-5 stars)", options=["All"] + options["rating"])
     product = st.sidebar.selectbox("Product", options=["All"] + options["product"])
     issue = st.sidebar.selectbox("Issue", options=["All"] + options["issue"])
@@ -172,8 +210,10 @@ def _build_sidebar_filters() -> dict[str, Any]:
     return {
         "date_from": date_from.isoformat() if date_from else None,
         "date_to": date_to.isoformat() if date_to else None,
-        "source": source,
+        "source": selected_sources[0] if len(selected_sources) == 1 else None,
+        "sources": selected_sources,
         "subreddit": None if subreddit == "All" else subreddit,
+        "web_domain": None if web_domain == "All" else web_domain,
         "google_play_app": None if google_play_app in (None, "All") else google_play_app,
         "rating": None if rating == "All" else int(rating),
         "product_tags": [] if product == "All" else [product],
