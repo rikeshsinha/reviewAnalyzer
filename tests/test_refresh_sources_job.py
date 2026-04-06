@@ -30,7 +30,7 @@ def test_refresh_sources_runs_enabled_platforms(monkeypatch) -> None:
 
     monkeypatch.setattr(
         refresh_sources,
-        "run_for_platform",
+        "_run_platform_refresh",
         lambda platform, config, days_back: calls.append((platform, config, days_back)),
     )
 
@@ -54,13 +54,13 @@ def test_refresh_sources_continues_after_platform_failure(monkeypatch, caplog) -
         ],
     )
 
-    def _run_for_platform(platform: str, config: dict[str, object], days_back: int) -> None:
+    def _run_platform_refresh(platform: str, config: dict[str, object], days_back: int) -> None:
         del config, days_back
         calls.append(platform)
         if platform == "reddit":
             raise RuntimeError("reddit error")
 
-    monkeypatch.setattr(refresh_sources, "run_for_platform", _run_for_platform)
+    monkeypatch.setattr(refresh_sources, "_run_platform_refresh", _run_platform_refresh)
     monkeypatch.delenv("INGESTION_FAIL_FAST", raising=False)
 
     refresh_sources.run()
@@ -81,15 +81,34 @@ def test_refresh_sources_fail_fast(monkeypatch) -> None:
         ],
     )
 
-    def _run_for_platform(platform: str, config: dict[str, object], days_back: int) -> None:
+    def _run_platform_refresh(platform: str, config: dict[str, object], days_back: int) -> None:
         del config, days_back
         calls.append(platform)
         raise RuntimeError("boom")
 
-    monkeypatch.setattr(refresh_sources, "run_for_platform", _run_for_platform)
+    monkeypatch.setattr(refresh_sources, "_run_platform_refresh", _run_platform_refresh)
     monkeypatch.setenv("INGESTION_FAIL_FAST", "true")
 
     with pytest.raises(RuntimeError, match="INGESTION_FAIL_FAST"):
         refresh_sources.run()
 
     assert calls == ["reddit"]
+
+
+def test_run_platform_refresh_routes_web_reviews_to_dedicated_job(monkeypatch) -> None:
+    web_calls: list[tuple[dict[str, object], int]] = []
+
+    monkeypatch.setattr(
+        refresh_sources,
+        "run_for_web_reviews",
+        lambda config, days_back: web_calls.append((config, days_back)),
+    )
+    monkeypatch.setattr(
+        refresh_sources,
+        "run_for_platform",
+        lambda platform, config, days_back: (_ for _ in ()).throw(RuntimeError(platform)),
+    )
+
+    refresh_sources._run_platform_refresh("web_reviews", {"sites": ["example.com"]}, 14)
+
+    assert web_calls == [({"sites": ["example.com"]}, 14)]
