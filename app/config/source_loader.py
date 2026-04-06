@@ -8,9 +8,11 @@ from pathlib import Path
 import re
 from typing import Any
 
+from app.config.settings import get_ingestion_settings
+
 
 BASE_SOURCE_CONFIG_PATH = Path(__file__).resolve().parent / "source_config.yaml"
-RUNTIME_SOURCE_CONFIG_PATH = Path("data/runtime_source_config.yaml")
+RUNTIME_SOURCE_CONFIG_PATH = Path(get_ingestion_settings().runtime_source_config_path)
 logger = logging.getLogger(__name__)
 COUNTRY_CODE_PATTERN = re.compile(r"^[a-z]{2}$")
 GOOGLE_PLAY_PACKAGE_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)+$")
@@ -150,6 +152,40 @@ def _normalize_platform_config(platform: str, raw: dict[str, Any]) -> PlatformSo
         normalized["countries"] = countries
         normalized["languages"] = languages
         normalized["max_reviews_per_app"] = max_reviews_per_app
+    elif platform == "web_reviews":
+        sites = _normalize_string_list(raw.get("sites", []), field_name="sites", platform=platform)
+        if enabled and not sites:
+            raise SourceConfigError("platform 'web_reviews' requires non-empty 'sites' when enabled")
+
+        max_pages_per_site = raw.get("max_pages_per_site", 50)
+        if not isinstance(max_pages_per_site, int) or max_pages_per_site <= 0:
+            raise SourceConfigError(
+                "platform 'web_reviews' field 'max_pages_per_site' must be a positive integer"
+            )
+
+        min_content_chars = raw.get("min_content_chars", 500)
+        if not isinstance(min_content_chars, int) or min_content_chars <= 0:
+            raise SourceConfigError(
+                "platform 'web_reviews' field 'min_content_chars' must be a positive integer"
+            )
+
+        crawl_paths = _normalize_string_list(
+            raw.get("crawl_paths", ["homepage", "category"]),
+            field_name="crawl_paths",
+            platform=platform,
+        )
+        if not crawl_paths:
+            raise SourceConfigError("platform 'web_reviews' field 'crawl_paths' cannot be empty")
+
+        prioritize_keywords = raw.get("prioritize_keywords", False)
+        if not isinstance(prioritize_keywords, bool):
+            raise SourceConfigError("platform 'web_reviews' field 'prioritize_keywords' must be a boolean")
+
+        normalized["sites"] = sites
+        normalized["max_pages_per_site"] = max_pages_per_site
+        normalized["min_content_chars"] = min_content_chars
+        normalized["crawl_paths"] = crawl_paths
+        normalized["prioritize_keywords"] = prioritize_keywords
     else:
         for key, value in raw.items():
             if key in {"enabled", "days_back", "keywords"}:

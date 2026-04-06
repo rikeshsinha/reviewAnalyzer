@@ -18,3 +18,22 @@ platforms:
     languages: ["en"]
     max_reviews_per_app: 1000
     keywords: []
+  web_reviews:
+    enabled: false
+    sites:
+      [
+        "trustpilot.com",
+        "g2.com",
+        "cnet.com",
+        "pcmag.com",
+        "theverge.com",
+        "androidauthority.com",
+        "tomsguide.com",
+        "techradar.com",
+        "amazon.com",
+        "bestbuy.com",
+      ]
+    max_pages_per_site: 50
+    min_content_chars: 500
+    crawl_paths: ["homepage", "category"]
+    prioritize_keywords: false

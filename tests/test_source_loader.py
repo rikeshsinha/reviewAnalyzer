@@ -25,13 +25,20 @@ platforms:
     languages: ["en"]
     max_reviews_per_app: 250
     keywords: []
+  web_reviews:
+    enabled: true
+    sites: ["example.com", "reviews.example.org"]
+    max_pages_per_site: 75
+    min_content_chars: 600
+    crawl_paths: ["homepage"]
+    prioritize_keywords: true
 """.strip(),
         encoding="utf-8",
     )
 
     configs = load_source_config(config_path)
 
-    assert len(configs) == 2
+    assert len(configs) == 3
     reddit = next(config for config in configs if config.platform == "reddit")
     assert reddit.enabled is True
     assert reddit.days_back == 14
@@ -42,6 +49,13 @@ platforms:
     assert google_play.config["countries"] == ["us", "gb"]
     assert google_play.config["languages"] == ["en"]
     assert google_play.config["max_reviews_per_app"] == 250
+    web_reviews = next(config for config in configs if config.platform == "web_reviews")
+    assert web_reviews.enabled is True
+    assert web_reviews.config["sites"] == ["example.com", "reviews.example.org"]
+    assert web_reviews.config["max_pages_per_site"] == 75
+    assert web_reviews.config["min_content_chars"] == 600
+    assert web_reviews.config["crawl_paths"] == ["homepage"]
+    assert web_reviews.config["prioritize_keywords"] is True
 
 
 def test_get_enabled_platform_configs_filters_disabled(tmp_path: Path) -> None:
@@ -183,6 +197,10 @@ platforms:
     enabled: false
     apps: ["com.base.app"]
     keywords: []
+  web_reviews:
+    enabled: true
+    sites: ["base.example"]
+    keywords: ["base"]
 """.strip(),
         encoding="utf-8",
     )
@@ -192,6 +210,9 @@ platforms:
   reddit:
     communities: ["RuntimeOnly"]
     days_back: 14
+  web_reviews:
+    sites: ["runtime.example"]
+    max_pages_per_site: 60
 """.strip(),
         encoding="utf-8",
     )
@@ -202,12 +223,19 @@ platforms:
     configs = load_source_config()
     reddit = next(config for config in configs if config.platform == "reddit")
     google_play = next(config for config in configs if config.platform == "google_play")
+    web_reviews = next(config for config in configs if config.platform == "web_reviews")
 
     assert reddit.enabled is True
     assert reddit.days_back == 14
     assert reddit.config["subreddits"] == ["RuntimeOnly"]
     assert reddit.config["keywords"] == ["base_keyword"]
     assert google_play.config["apps"] == ["com.base.app"]
+    assert web_reviews.config["sites"] == ["runtime.example"]
+    assert web_reviews.config["keywords"] == ["base"]
+    assert web_reviews.config["max_pages_per_site"] == 60
+    assert web_reviews.config["min_content_chars"] == 500
+    assert web_reviews.config["crawl_paths"] == ["homepage", "category"]
+    assert web_reviews.config["prioritize_keywords"] is False
 
 
 def test_load_source_config_ignores_unknown_runtime_platforms(

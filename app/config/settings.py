@@ -10,6 +10,17 @@ from dotenv import load_dotenv
 from pydantic import BaseModel, Field, ValidationError
 
 
+class WebReviewsSourceSettings(BaseModel):
+    """Typed settings for web review crawling source configuration."""
+
+    enabled: bool = False
+    sites: list[str] = Field(default_factory=list)
+    max_pages_per_site: int = Field(50, ge=1)
+    min_content_chars: int = Field(500, ge=1)
+    crawl_paths: list[str] = Field(default_factory=lambda: ["homepage", "category"])
+    prioritize_keywords: bool = False
+
+
 class CommonSettings(BaseModel):
     """Settings shared by app components."""
 
@@ -46,6 +57,7 @@ class IngestionSettings(BaseModel):
         True,
         alias="PUBLIC_REDDIT_INCLUDE_RECENT_WHEN_NO_KEYWORD_HITS",
     )
+    runtime_source_config_path: str = Field("data/runtime_source_config.yaml", alias="RUNTIME_SOURCE_CONFIG_PATH")
 
 
 class EnrichmentSettings(CommonSettings):
@@ -79,6 +91,7 @@ def _build_env_values() -> dict[str, Any]:
         "PUBLIC_REDDIT_INCLUDE_RECENT_WHEN_NO_KEYWORD_HITS": os.getenv(
             "PUBLIC_REDDIT_INCLUDE_RECENT_WHEN_NO_KEYWORD_HITS"
         ),
+        "RUNTIME_SOURCE_CONFIG_PATH": os.getenv("RUNTIME_SOURCE_CONFIG_PATH"),
     }
     cleaned_values: dict[str, Any] = {}
     for key, value in raw_values.items():
