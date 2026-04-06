@@ -138,6 +138,8 @@ def run_for_web_reviews(
 
         max_pages_per_site = max(int(config.get("max_pages_per_site", 50)), 1)
         min_content_chars = max(int(config.get("min_content_chars", 500)), 1)
+        keywords = [item for item in config.get("keywords", []) if isinstance(item, str) and item.strip()]
+        prioritize_keywords = bool(config.get("prioritize_keywords", False))
         category_urls_by_site = config.get("category_urls_by_site", {})
 
         _safe_ensure_dedupe_constraints(session)
@@ -160,6 +162,8 @@ def run_for_web_reviews(
             candidate_urls = client.discover_candidate_article_urls(
                 homepage_url=homepage_url,
                 category_urls=category_urls,
+                keywords=keywords,
+                prioritize_keywords=prioritize_keywords,
             )
             if len(candidate_urls) > max_pages_per_site:
                 candidate_urls = candidate_urls[:max_pages_per_site]

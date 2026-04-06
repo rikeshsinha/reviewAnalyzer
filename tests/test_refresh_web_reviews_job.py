@@ -36,8 +36,17 @@ def test_run_for_web_reviews_persists_docs_and_run_stats(monkeypatch) -> None:
     monkeypatch.setattr(refresh_web_reviews, "SessionLocal", lambda: session)
 
     class _FakeClient:
-        def discover_candidate_article_urls(self, *, homepage_url: str, category_urls: list[str] | None = None) -> list[str]:
+        def discover_candidate_article_urls(
+            self,
+            *,
+            homepage_url: str,
+            category_urls: list[str] | None = None,
+            keywords: list[str] | None = None,
+            prioritize_keywords: bool = False,
+        ) -> list[str]:
             del category_urls
+            del keywords
+            del prioritize_keywords
             return [
                 f"{homepage_url}/reviews/galaxy-watch-8-review",
                 f"{homepage_url}/reviews/galaxy-watch-8-review?utm=campaign",
@@ -97,8 +106,17 @@ def test_run_for_web_reviews_honors_explicit_date_range(monkeypatch) -> None:
     monkeypatch.setattr(refresh_web_reviews, "SessionLocal", lambda: session)
 
     class _FakeClient:
-        def discover_candidate_article_urls(self, *, homepage_url: str, category_urls: list[str] | None = None) -> list[str]:
+        def discover_candidate_article_urls(
+            self,
+            *,
+            homepage_url: str,
+            category_urls: list[str] | None = None,
+            keywords: list[str] | None = None,
+            prioritize_keywords: bool = False,
+        ) -> list[str]:
             del category_urls
+            del keywords
+            del prioritize_keywords
             return [
                 f"{homepage_url}/reviews/in-range-review",
                 f"{homepage_url}/reviews/out-of-range-review",
