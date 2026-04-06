@@ -232,3 +232,86 @@ def test_search_documents_filter_logic_source_date_and_sentiment() -> None:
     )
 
     assert [row["external_id"] for row in results] == ["d1"]
+
+
+def test_search_documents_supports_multi_source_and_web_domain_filters() -> None:
+    session = _build_session()
+    service = RetrievalService(session)
+
+    reddit_source_id = int(
+        session.execute(
+            text(
+                """
+                INSERT INTO sources (platform, external_id, name, metadata_json)
+                VALUES ('reddit', 'reddit', 'reddit', '{}')
+                """
+            )
+        ).lastrowid
+    )
+    web_source_id = int(
+        session.execute(
+            text(
+                """
+                INSERT INTO sources (platform, external_id, name, metadata_json)
+                VALUES ('web_reviews', 'web_reviews', 'web_reviews', '{}')
+                """
+            )
+        ).lastrowid
+    )
+
+    session.execute(
+        text(
+            """
+            INSERT INTO documents (source_id, external_id, title, body, author, url, published_at, raw_json)
+            VALUES (:source_id, 'reddit-doc', 'Battery post', 'battery details', 'u1', 'http://x/reddit', :published_at, :raw_json)
+            """
+        ),
+        {
+            "source_id": reddit_source_id,
+            "published_at": "2026-03-15T09:00:00",
+            "raw_json": json.dumps({"subreddit": "android"}),
+        },
+    )
+    session.execute(
+        text(
+            """
+            INSERT INTO documents (source_id, external_id, title, body, author, url, published_at, raw_json)
+            VALUES (:source_id, 'web-doc-a', 'Battery review', 'battery details', 'u2', 'http://x/web-a', :published_at, :raw_json)
+            """
+        ),
+        {
+            "source_id": web_source_id,
+            "published_at": "2026-03-15T10:00:00",
+            "raw_json": json.dumps({"community_or_channel": "techradar.com"}),
+        },
+    )
+    session.execute(
+        text(
+            """
+            INSERT INTO documents (source_id, external_id, title, body, author, url, published_at, raw_json)
+            VALUES (:source_id, 'web-doc-b', 'Battery review', 'battery details', 'u3', 'http://x/web-b', :published_at, :raw_json)
+            """
+        ),
+        {
+            "source_id": web_source_id,
+            "published_at": "2026-03-16T10:00:00",
+            "raw_json": json.dumps({"community_or_channel": "cnet.com"}),
+        },
+    )
+    session.commit()
+
+    mixed_results = service.search_documents(
+        query="battery",
+        filters={"sources": ["reddit", "web_reviews"]},
+        limit=20,
+        offset=0,
+    )
+    assert {row["external_id"] for row in mixed_results} == {"reddit-doc", "web-doc-a", "web-doc-b"}
+
+    narrowed_results = service.search_documents(
+        query="battery",
+        filters={"sources": ["reddit", "web_reviews"], "web_domain": "techradar.com"},
+        limit=20,
+        offset=0,
+    )
+    assert [row["external_id"] for row in narrowed_results] == ["web-doc-a"]

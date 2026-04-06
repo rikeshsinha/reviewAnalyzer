@@ -259,13 +259,27 @@ class AnalysisService:
         where_parts: list[str] = []
         params: dict[str, Any] = {}
 
-        if source := filters.get("source"):
+        sources = [str(item).strip() for item in (filters.get("sources") or []) if str(item).strip()]
+        if sources:
+            placeholders: list[str] = []
+            for idx, source_name in enumerate(sources):
+                key = f"source_{idx}"
+                params[key] = source_name
+                placeholders.append(f":{key}")
+            where_parts.append(
+                f"AND EXISTS (SELECT 1 FROM sources s WHERE s.id = d.source_id AND s.name IN ({', '.join(placeholders)}))"
+            )
+        elif source := filters.get("source"):
             where_parts.append("AND EXISTS (SELECT 1 FROM sources s WHERE s.id = d.source_id AND s.name = :source)")
             params["source"] = source
 
         if subreddit := filters.get("subreddit"):
             where_parts.append("AND json_extract(d.raw_json, '$.subreddit') = :subreddit")
             params["subreddit"] = subreddit
+
+        if web_domain := filters.get("web_domain"):
+            where_parts.append("AND json_extract(d.raw_json, '$.community_or_channel') = :web_domain")
+            params["web_domain"] = web_domain
 
         if google_play_app := filters.get("google_play_app"):
             where_parts.append("AND json_extract(d.raw_json, '$.community_or_channel') = :google_play_app")

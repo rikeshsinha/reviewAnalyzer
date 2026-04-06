@@ -7,7 +7,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 
 from app.services.analysis_service import AnalysisConfig, AnalysisService
-from app.ui.pages.dashboard import _fetch_ranked_complaints
+from app.ui.pages.dashboard import _fetch_ranked_complaints, _where_clause
 
 
 def _build_session() -> Session:
@@ -292,3 +292,17 @@ def test_insights_page_render_smoke() -> None:
     insights._render_payload("sentiment", payload, {})
     insights._render_payload("complaints", payload, {})
     insights._render_payload("features", payload, {})
+
+
+def test_dashboard_where_clause_supports_multi_source_and_web_domain() -> None:
+    where_sql, params = _where_clause(
+        {
+            "sources": ["reddit", "web_reviews"],
+            "web_domain": "techradar.com",
+        }
+    )
+
+    assert "s.name IN" in where_sql
+    assert params["source_0"] == "reddit"
+    assert params["source_1"] == "web_reviews"
+    assert params["web_domain"] == "techradar.com"
