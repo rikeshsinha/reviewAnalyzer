@@ -6,7 +6,7 @@ import logging
 import os
 
 from app.config.settings import get_ingestion_settings
-from app.config.source_loader import get_enabled_platform_configs
+from app.config.source_loader import PlatformSourceConfig, get_enabled_platform_configs
 from app.jobs.refresh_reddit import run_for_platform
 from app.jobs.refresh_web_reviews import run_for_web_reviews
 from app.utils.logging_config import setup_logging
@@ -43,6 +43,29 @@ def _get_selected_platforms() -> list[str]:
     return selected
 
 
+def _filter_selected_platforms(
+    enabled_configs: list[PlatformSourceConfig],
+    selected_platforms: list[str],
+) -> list[PlatformSourceConfig]:
+    if not selected_platforms:
+        return enabled_configs
+
+    enabled_by_name = {cfg.platform: cfg for cfg in enabled_configs}
+    missing = [name for name in selected_platforms if name not in enabled_by_name]
+    if missing:
+        available = ", ".join(sorted(enabled_by_name)) or "none"
+        requested = ", ".join(missing)
+        raise RuntimeError(
+            "Selected platform(s) are not enabled or not defined: "
+            + requested
+            + ". Enabled platforms: "
+            + available
+            + ". Update source config or adjust INGESTION_PLATFORMS."
+        )
+
+    return [enabled_by_name[name] for name in selected_platforms]
+
+
 def run() -> None:
     """Run ingestion for each enabled platform from source config."""
 
@@ -53,13 +76,7 @@ def run() -> None:
         raise RuntimeError("No enabled platforms found in merged source configuration")
     selected_platforms = _get_selected_platforms()
     if selected_platforms:
-        enabled_configs = [cfg for cfg in enabled_configs if cfg.platform in selected_platforms]
-        if not enabled_configs:
-            raise RuntimeError(
-                "No enabled platforms matched INGESTION_PLATFORMS="
-                + ",".join(selected_platforms)
-                + ". Enable one of the selected platforms in source config or adjust the selection."
-            )
+        enabled_configs = _filter_selected_platforms(enabled_configs, selected_platforms)
 
     fail_fast = _should_fail_fast()
     failures: list[str] = []

@@ -153,5 +153,18 @@ def test_refresh_sources_selected_platforms_without_enabled_match_raises(monkeyp
     )
     monkeypatch.setenv("INGESTION_PLATFORMS", "google_play")
 
-    with pytest.raises(RuntimeError, match="No enabled platforms matched INGESTION_PLATFORMS"):
+    with pytest.raises(RuntimeError, match="not enabled or not defined"):
         refresh_sources.run()
+
+
+
+def test_filter_selected_platforms_preserves_selected_order(monkeypatch) -> None:
+    enabled = [
+        PlatformSourceConfig(platform="reddit", enabled=True, days_back=30, config={"subreddits": ["a"]}),
+        PlatformSourceConfig(platform="web_reviews", enabled=True, days_back=14, config={"sites": ["example.com"]}),
+        PlatformSourceConfig(platform="google_play", enabled=True, days_back=7, config={"apps": ["com.app"]}),
+    ]
+
+    selected = refresh_sources._filter_selected_platforms(enabled, ["google_play", "reddit"])  # noqa: SLF001
+
+    assert [cfg.platform for cfg in selected] == ["google_play", "reddit"]

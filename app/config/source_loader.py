@@ -32,93 +32,200 @@ class SourceConfigError(ValueError):
     """Raised when source configuration shape is invalid."""
 
 
-def _parse_scalar(value: str) -> Any:
-    value = value.strip()
-    lowered = value.lower()
+def _strip_inline_comment(value: str) -> str:
+    in_quote: str | None = None
+    escaped = False
+    result_chars: list[str] = []
+    for char in value:
+        if escaped:
+            result_chars.append(char)
+            escaped = False
+            continue
+        if char == "\\":
+            escaped = True
+            result_chars.append(char)
+            continue
+        if in_quote:
+            if char == in_quote:
+                in_quote = None
+            result_chars.append(char)
+            continue
+        if char in {"'", '"'}:
+            in_quote = char
+            result_chars.append(char)
+            continue
+        if char == "#":
+            break
+        result_chars.append(char)
+    return "".join(result_chars).rstrip()
+
+
+def _split_inline_list_items(inner: str) -> list[str]:
+    items: list[str] = []
+    current: list[str] = []
+    in_quote: str | None = None
+    escaped = False
+    for char in inner:
+        if escaped:
+            current.append(char)
+            escaped = False
+            continue
+        if char == "\\":
+            escaped = True
+            current.append(char)
+            continue
+        if in_quote:
+            if char == in_quote:
+                in_quote = None
+            current.append(char)
+            continue
+        if char in {"'", '"'}:
+            in_quote = char
+            current.append(char)
+            continue
+        if char == ",":
+            token = "".join(current).strip()
+            if token:
+                items.append(token)
+            current = []
+            continue
+        current.append(char)
+
+    token = "".join(current).strip()
+    if token:
+        items.append(token)
+    return items
+
+
+def _parse_scalar(value: str, *, line_no: int) -> Any:
+    normalized = _strip_inline_comment(value).strip()
+    if normalized == "":
+        return ""
+
+    lowered = normalized.lower()
     if lowered in {"true", "false"}:
         return lowered == "true"
-    if value.isdigit():
-        return int(value)
-    if value.startswith("[") and value.endswith("]"):
-        inner = value[1:-1].strip()
+
+    if re.fullmatch(r"-?\d+", normalized):
+        return int(normalized)
+
+    if normalized.startswith("["):
+        if not normalized.endswith("]"):
+            raise SourceConfigError(f"line {line_no}: inline list is missing closing ']'")
+        inner = normalized[1:-1].strip()
         if not inner:
             return []
-        items = []
-        for raw_item in inner.split(","):
-            item = raw_item.strip().strip('"').strip("'")
-            if item:
-                items.append(item)
-        return items
-    return value.strip('"').strip("'")
+        parsed_items: list[Any] = []
+        for token in _split_inline_list_items(inner):
+            parsed_items.append(_parse_scalar(token, line_no=line_no))
+        return parsed_items
+
+    if (normalized.startswith('"') and normalized.endswith('"')) or (
+        normalized.startswith("'") and normalized.endswith("'")
+    ):
+        return normalized[1:-1]
+
+    return normalized
 
 
-def _parse_source_yaml(text: str) -> dict[str, dict[str, Any]]:
-    platforms: dict[str, dict[str, Any]] = {}
-    in_platforms_block = False
+def _parse_source_yaml(text: str, *, source_path: Path | None = None) -> dict[str, dict[str, Any]]:
+    path_label = str(source_path) if source_path else "<config>"
+    root: dict[str, Any] = {}
     current_platform: str | None = None
-    pending_list_key: str | None = None
-    pending_list_indent: int | None = None
-    pending_list_items: list[Any] = []
+    current_list_key: str | None = None
+    current_list_indent: int | None = None
 
     lines = text.splitlines()
-    index = 0
-    while index < len(lines):
+    for index, raw_line in enumerate(lines):
         line_no = index + 1
-        raw_line = lines[index]
-        index += 1
-        if not raw_line.strip() or raw_line.strip().startswith("#"):
+        line_without_comments = _strip_inline_comment(raw_line)
+        if not line_without_comments.strip():
             continue
 
-        indent = len(raw_line) - len(raw_line.lstrip(" "))
-        line = raw_line.strip()
+        indent = len(line_without_comments) - len(line_without_comments.lstrip(" "))
+        line = line_without_comments.strip()
 
-        if indent == 0 and line == "platforms:":
-            in_platforms_block = True
+        if indent == 0:
             current_platform = None
+            current_list_key = None
+            current_list_indent = None
+            if line != "platforms:":
+                raise SourceConfigError(f"{path_label}: line {line_no}: expected top-level 'platforms:' mapping")
+            if "platforms" in root and isinstance(root["platforms"], dict):
+                raise SourceConfigError(f"{path_label}: line {line_no}: duplicate top-level 'platforms' key")
+            root["platforms"] = {}
             continue
 
-        if not in_platforms_block:
-            raise SourceConfigError(f"line {line_no}: expected top-level 'platforms:' block")
-
-        if pending_list_key is not None:
-            if pending_list_indent is None:
-                raise SourceConfigError("internal parser state invalid for pending list")
-            if indent > pending_list_indent and line.startswith("- "):
-                pending_list_items.append(_parse_scalar(line[2:]))
-                continue
-            platforms[current_platform][pending_list_key] = list(pending_list_items)  # type: ignore[index]
-            pending_list_key = None
-            pending_list_indent = None
-            pending_list_items = []
+        platforms = root.get("platforms")
+        if not isinstance(platforms, dict):
+            raise SourceConfigError(f"{path_label}: line {line_no}: expected top-level 'platforms:' block")
 
         if indent == 2 and line.endswith(":"):
-            current_platform = line[:-1].strip().lower()
-            if not current_platform:
-                raise SourceConfigError(f"line {line_no}: platform key cannot be empty")
-            platforms[current_platform] = {}
+            platform_name = line[:-1].strip().lower()
+            if not platform_name:
+                raise SourceConfigError(f"{path_label}: line {line_no}: platform key cannot be empty")
+            current_platform = platform_name
+            current_list_key = None
+            current_list_indent = None
+            platforms[platform_name] = {}
             continue
 
-        if indent == 4 and current_platform and ":" in line:
+        if current_platform is None:
+            raise SourceConfigError(
+                f"{path_label}: line {line_no}: unsupported YAML structure before platform declaration"
+            )
+
+        platform_values = platforms.get(current_platform)
+        if not isinstance(platform_values, dict):
+            raise SourceConfigError(f"{path_label}: line {line_no}: platform '{current_platform}' must be a mapping")
+
+        if current_list_key is not None:
+            if current_list_indent is None:
+                raise SourceConfigError(
+                    f"{path_label}: line {line_no}: internal parser state invalid for list '{current_list_key}'"
+                )
+            if indent > current_list_indent and line.startswith("- "):
+                platform_values[current_list_key].append(_parse_scalar(line[2:], line_no=line_no))
+                continue
+            current_list_key = None
+            current_list_indent = None
+
+        if indent == 4:
+            if ":" not in line:
+                raise SourceConfigError(
+                    f"{path_label}: line {line_no}: unsupported YAML structure for platform '{current_platform}'"
+                )
             key, raw_value = line.split(":", 1)
             normalized_key = key.strip()
             if not normalized_key:
-                raise SourceConfigError(f"line {line_no}: platform '{current_platform}' field name cannot be empty")
-            parsed = _parse_scalar(raw_value)
-            if parsed == "" and not raw_value.strip():
-                pending_list_key = normalized_key
-                pending_list_indent = indent
-                pending_list_items = []
+                raise SourceConfigError(
+                    f"{path_label}: line {line_no}: platform '{current_platform}' field name cannot be empty"
+                )
+
+            parsed = _parse_scalar(raw_value, line_no=line_no)
+            if parsed == "" and _strip_inline_comment(raw_value).strip() == "":
+                platform_values[normalized_key] = []
+                current_list_key = normalized_key
+                current_list_indent = indent
                 continue
-            platforms[current_platform][normalized_key] = parsed
+            platform_values[normalized_key] = parsed
             continue
 
         raise SourceConfigError(
-            f"line {line_no}: unsupported YAML structure for platform '{current_platform or 'unknown'}'. "
-            "Use 'field: [\"a\", \"b\"]' or block-style lists with '-' items."
+            f"{path_label}: line {line_no}: unsupported YAML structure for platform '{current_platform}'. "
+            "Use inline lists ([\"a\", \"b\"]) or block lists with '-' items."
         )
 
-    if pending_list_key is not None and current_platform:
-        platforms[current_platform][pending_list_key] = list(pending_list_items)
+    if "platforms" not in root:
+        raise SourceConfigError(f"{path_label}: missing required top-level 'platforms' mapping")
+
+    platforms = root["platforms"]
+    if not isinstance(platforms, dict):
+        raise SourceConfigError(f"{path_label}: top-level 'platforms' value must be a mapping")
+
+    for platform, raw_platform in platforms.items():
+        if not isinstance(raw_platform, dict):
+            raise SourceConfigError(f"{path_label}: platform '{platform}' config must be a mapping")
 
     return platforms
 
@@ -250,12 +357,21 @@ def _load_raw_platforms(config_path: Path) -> dict[str, dict[str, Any]]:
     text = config_path.read_text(encoding="utf-8")
     if not text.strip():
         return {}
-    return _parse_source_yaml(text)
+    return _parse_source_yaml(text, source_path=config_path)
 
 
 def _get_merged_platforms() -> dict[str, dict[str, Any]]:
     base_platforms = _load_raw_platforms(BASE_SOURCE_CONFIG_PATH)
-    runtime_platforms = _load_raw_platforms(RUNTIME_SOURCE_CONFIG_PATH)
+
+    runtime_platforms: dict[str, dict[str, Any]] = {}
+    try:
+        runtime_platforms = _load_raw_platforms(RUNTIME_SOURCE_CONFIG_PATH)
+    except SourceConfigError as exc:
+        logger.warning(
+            "Ignoring runtime source override '%s' because it is invalid: %s",
+            RUNTIME_SOURCE_CONFIG_PATH,
+            exc,
+        )
 
     merged_platforms = dict(base_platforms)
     for runtime_platform, runtime_values in runtime_platforms.items():
