@@ -114,3 +114,35 @@ def test_headers_are_configurable(monkeypatch) -> None:
 
     assert session.headers["User-Agent"] == "custom-agent"
     assert session.headers["Accept-Language"] == "en-US"
+
+
+def test_prioritize_keywords_orders_matches_first_and_keeps_breadth(monkeypatch) -> None:
+    homepage = "https://example.com"
+    samsung = "https://example.com/reviews/samsung-health-review"
+    galaxy = "https://example.com/reviews/galaxy-watch-tips"
+    broad = "https://example.com/reviews/fitness-trackers-comparison"
+
+    response_map = {
+        homepage: _FakeResponse(
+            200,
+            (
+                f'<a href="{samsung}">Samsung Health deep dive</a>'
+                f'<a href="{galaxy}">Galaxy Watch setup tips</a>'
+                f'<a href="{broad}">Best fitness trackers this year</a>'
+            ),
+        ),
+    }
+    monkeypatch.setattr("requests.Session", lambda: _FakeSession(response_map))
+    monkeypatch.setattr(
+        "app.ingestion.web_reviews_client.urllib.robotparser.RobotFileParser",
+        lambda: _FakeRobotParser({homepage, samsung, galaxy, broad}),
+    )
+
+    client = WebReviewsClient(request_delay_seconds=0)
+    discovered = client.discover_candidate_article_urls(
+        homepage_url=homepage,
+        keywords=["Samsung Health", "Galaxy"],
+        prioritize_keywords=True,
+    )
+
+    assert discovered == [samsung, galaxy, broad]

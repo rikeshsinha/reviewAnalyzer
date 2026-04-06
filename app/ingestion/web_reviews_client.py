@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import logging
+import re
 import time
 from html.parser import HTMLParser
 from typing import Iterable
@@ -32,14 +33,43 @@ class _LinkExtractor(HTMLParser):
 
     def __init__(self) -> None:
         super().__init__()
-        self.links: list[str] = []
+        self.links: list[tuple[str, str]] = []
+        self._active_href: str | None = None
+        self._active_chunks: list[str] = []
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         if tag != "a":
             return
+        self._active_href = None
+        self._active_chunks = []
         for key, value in attrs:
             if key == "href" and value:
-                self.links.append(value)
+                self._active_href = value
+            if key == "title" and value:
+                self._active_chunks.append(value)
+
+    def handle_data(self, data: str) -> None:
+        if self._active_href and data:
+            cleaned = data.strip()
+            if cleaned:
+                self._active_chunks.append(cleaned)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag != "a" or not self._active_href:
+            return
+        anchor_text = " ".join(self._active_chunks).strip()
+        self.links.append((self._active_href, anchor_text))
+        self._active_href = None
+        self._active_chunks = []
+
+
+_TAG_RE = re.compile(r"<[^>]+>")
+
+
+@dataclass
+class _ScoredCandidate:
+    url: str
+    score: int
 
 
 @dataclass
@@ -52,6 +82,69 @@ class WebReviewsClient:
     request_delay_seconds: float = DEFAULT_RATE_LIMIT_SECONDS
     _robots_cache: dict[str, urllib.robotparser.RobotFileParser] = field(default_factory=dict)
     _last_request_ts: float | None = None
+
+    @staticmethod
+    def _normalize_keywords(keywords: Iterable[str] | None) -> list[str]:
+        if not keywords:
+            return []
+        normalized: list[str] = []
+        for keyword in keywords:
+            cleaned = str(keyword).strip().casefold()
+            if cleaned:
+                normalized.append(cleaned)
+        return normalized
+
+    @staticmethod
+    def _keyword_hits(text: str, keywords: list[str]) -> int:
+        lowered = text.casefold()
+        return sum(1 for keyword in keywords if keyword in lowered)
+
+    def _score_candidate_url(
+        self,
+        *,
+        url: str,
+        anchor_text: str,
+        page_body_text: str,
+        keywords: list[str],
+    ) -> int:
+        if not keywords:
+            return 0
+        title_hits = self._keyword_hits(anchor_text, keywords)
+        body_hits = self._keyword_hits(page_body_text, keywords)
+        slug_hits = self._keyword_hits(urlparse(url).path.replace("-", " "), keywords)
+        # Title relevance should dominate; body context is a medium signal; URL slug is weak.
+        return (title_hits * 6) + (body_hits * 3) + slug_hits
+
+    @staticmethod
+    def _strip_html(html: str) -> str:
+        return _TAG_RE.sub(" ", html)
+
+    @staticmethod
+    def _order_with_breadth(candidates: list[_ScoredCandidate]) -> list[str]:
+        ranked = [candidate for candidate in candidates if candidate.score > 0]
+        broad = [candidate for candidate in candidates if candidate.score <= 0]
+        ranked.sort(key=lambda candidate: candidate.score, reverse=True)
+
+        ordered: list[str] = []
+        ranked_index = 0
+        broad_index = 0
+
+        # Keep keyword matches first while still interleaving broad crawl coverage.
+        while ranked_index < len(ranked):
+            for _ in range(3):
+                if ranked_index >= len(ranked):
+                    break
+                ordered.append(ranked[ranked_index].url)
+                ranked_index += 1
+            if broad_index < len(broad):
+                ordered.append(broad[broad_index].url)
+                broad_index += 1
+
+        while broad_index < len(broad):
+            ordered.append(broad[broad_index].url)
+            broad_index += 1
+
+        return ordered
 
     def _build_headers(self) -> dict[str, str]:
         merged = {"User-Agent": self.user_agent}
@@ -147,18 +240,18 @@ class WebReviewsClient:
 
         return response
 
-    def _extract_links(self, base_url: str, html: str) -> list[str]:
+    def _extract_links(self, base_url: str, html: str) -> list[tuple[str, str]]:
         parser = _LinkExtractor()
         parser.feed(html)
 
-        links: list[str] = []
-        for raw_link in parser.links:
+        links: list[tuple[str, str]] = []
+        for raw_link, anchor_text in parser.links:
             absolute = urljoin(base_url, raw_link)
             parsed = urlparse(absolute)
             if parsed.scheme not in {"http", "https"}:
                 continue
             cleaned = parsed._replace(fragment="").geturl()
-            links.append(cleaned)
+            links.append((cleaned, anchor_text))
         return links
 
     def discover_candidate_article_urls(
@@ -166,6 +259,8 @@ class WebReviewsClient:
         *,
         homepage_url: str,
         category_urls: Iterable[str] | None = None,
+        keywords: Iterable[str] | None = None,
+        prioritize_keywords: bool = False,
     ) -> list[str]:
         """Crawl homepage/category pages and discover likely article URLs."""
 
@@ -173,8 +268,9 @@ class WebReviewsClient:
         if category_urls:
             allowed_pages.extend(category_urls)
 
-        discovered: list[str] = []
+        discovered: list[_ScoredCandidate] = []
         seen: set[str] = set()
+        normalized_keywords = self._normalize_keywords(keywords)
 
         with requests.Session() as session:
             session.headers.update(self._build_headers())
@@ -183,8 +279,9 @@ class WebReviewsClient:
                 response = self._safe_get(session, page_url)
                 if response is None:
                     continue
+                page_body_text = self._strip_html(response.text)
 
-                for link in self._extract_links(page_url, response.text):
+                for link, anchor_text in self._extract_links(page_url, response.text):
                     if link in seen:
                         continue
                     if not self._is_same_domain(homepage_url, link):
@@ -195,10 +292,17 @@ class WebReviewsClient:
                         logger.warning("Skipping discovered URL disallowed by robots.txt: %s", link)
                         continue
 
+                    score = self._score_candidate_url(
+                        url=link,
+                        anchor_text=anchor_text,
+                        page_body_text=page_body_text,
+                        keywords=normalized_keywords,
+                    )
                     seen.add(link)
-                    discovered.append(link)
-
-        return discovered
+                    discovered.append(_ScoredCandidate(url=link, score=score))
+        if not prioritize_keywords:
+            return [candidate.url for candidate in discovered]
+        return self._order_with_breadth(discovered)
 
     def fetch_articles(self, article_urls: Iterable[str]) -> dict[str, str]:
         """Fetch article HTML from already discovered candidate URLs."""
