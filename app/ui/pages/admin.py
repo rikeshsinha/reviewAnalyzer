@@ -17,6 +17,7 @@ from app.config.source_loader import (
     BASE_SOURCE_CONFIG_PATH,
     RUNTIME_SOURCE_CONFIG_PATH,
     SourceConfigError,
+    load_source_config,
     get_enabled_platform_configs,
 )
 from app.db.session import SessionLocal
@@ -137,72 +138,24 @@ def _read_platform_config(config_path: Path, platform: str) -> dict[str, Any]:
     if not config_path.exists():
         return {}
 
-    lines = config_path.read_text(encoding="utf-8").splitlines()
-    in_platform_block = False
-    values: dict[str, Any] = {}
-    pending_list_key: str | None = None
-    pending_list_items: list[str] = []
+    try:
+        configs = load_source_config(config_path)
+    except SourceConfigError:
+        return {}
 
-    for raw_line in lines:
-        line = raw_line.strip()
-        indent = len(raw_line) - len(raw_line.lstrip(" "))
+    for cfg in configs:
+        if cfg.platform != platform:
+            continue
+        values: dict[str, Any] = {
+            "enabled": cfg.enabled,
+            "days_back": cfg.days_back,
+            **cfg.config,
+        }
+        if platform == "reddit" and "subreddits" in values:
+            values["communities"] = list(values.pop("subreddits"))
+        return values
 
-        if indent == 2 and line == f"{platform}:":
-            in_platform_block = True
-            continue
-        if in_platform_block and indent == 2 and line.endswith(":") and line != f"{platform}:":
-            break
-        if not in_platform_block:
-            continue
-        if not line or line.startswith("#"):
-            continue
-
-        if pending_list_key:
-            if line.startswith("]"):
-                values[pending_list_key] = pending_list_items
-                pending_list_key = None
-                pending_list_items = []
-                continue
-            normalized = line.rstrip(",").strip().strip('"').strip("'").strip()
-            if normalized:
-                pending_list_items.append(normalized)
-            continue
-
-        if indent != 4 or ":" not in line:
-            continue
-
-        key, raw_value = line.split(":", 1)
-        key = key.strip()
-        value = raw_value.strip()
-
-        if value == "[":
-            pending_list_key = key
-            pending_list_items = []
-            continue
-        if value.startswith("[") and value.endswith("]"):
-            values[key] = _parse_inline_list(value)
-            continue
-        if value.isdigit():
-            values[key] = int(value)
-            continue
-        if value.lower() in {"true", "false"}:
-            values[key] = value.lower() == "true"
-            continue
-        values[key] = value.strip('"').strip("'")
-
-    return values
-
-
-def _parse_inline_list(raw: str) -> list[str]:
-    inner = raw.strip()[1:-1].strip()
-    if not inner:
-        return []
-    items: list[str] = []
-    for part in inner.split(","):
-        normalized = part.strip().strip('"').strip("'").strip()
-        if normalized:
-            items.append(normalized)
-    return items
+    return {}
 
 
 def _normalize_text_list(raw_text: str) -> list[str]:
@@ -532,7 +485,8 @@ def render(filters: dict[str, Any]) -> None:
             error_msg = f"Refresh failed for selected sources: {selected_label}."
             (st.success if ok else st.error)(status_msg if ok else error_msg)
             st.caption(f"Selected sources: `{selected_label}`")
-            st.code(logs or "No output")
+            output_with_context = f"Selected sources: {selected_label}\n\n{logs}" if logs else f"Selected sources: {selected_label}"
+            st.code(output_with_context)
 
     c4, _, _ = st.columns(3)
     with c4:

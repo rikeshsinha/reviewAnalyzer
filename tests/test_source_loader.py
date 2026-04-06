@@ -334,3 +334,88 @@ platforms:
 
     assert [config.platform for config in configs] == ["reddit"]
     assert "Ignoring unknown runtime platform override 'hacker_news'" in caplog.text
+
+
+
+def test_load_source_config_parses_mixed_inline_and_block_lists(tmp_path: Path) -> None:
+    config_path = tmp_path / "source_config.yaml"
+    config_path.write_text(
+        """
+platforms:
+  reddit:
+    enabled: true
+    communities: ["GalaxyWatch", "Android"]
+    keywords:
+      - sleep
+      - workout
+  web_reviews:
+    enabled: true
+    sites:
+      - trustpilot.com
+      - g2.com
+    keywords: ["battery", "health"]
+    max_pages_per_site: 25
+""".strip(),
+        encoding="utf-8",
+    )
+
+    configs = load_source_config(config_path)
+    reddit = next(config for config in configs if config.platform == "reddit")
+    web_reviews = next(config for config in configs if config.platform == "web_reviews")
+
+    assert reddit.config["subreddits"] == ["GalaxyWatch", "Android"]
+    assert reddit.config["keywords"] == ["sleep", "workout"]
+    assert web_reviews.config["sites"] == ["trustpilot.com", "g2.com"]
+    assert web_reviews.config["keywords"] == ["battery", "health"]
+
+
+def test_load_source_config_reports_path_and_line_for_invalid_yaml(tmp_path: Path) -> None:
+    config_path = tmp_path / "source_config.yaml"
+    config_path.write_text(
+        """
+platforms:
+  reddit:
+    enabled true
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SourceConfigError, match=r"source_config.yaml: line 3"):
+        load_source_config(config_path)
+
+
+def test_load_source_config_ignores_invalid_runtime_override_and_uses_base(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    base_path = tmp_path / "source_config.yaml"
+    runtime_path = tmp_path / "runtime_source_config.yaml"
+
+    base_path.write_text(
+        """
+platforms:
+  reddit:
+    enabled: true
+    communities: ["BaseOnly"]
+    keywords: ["base_keyword"]
+""".strip(),
+        encoding="utf-8",
+    )
+    runtime_path.write_text(
+        """
+platforms:
+  reddit:
+    communities: ["Broken"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(source_loader, "BASE_SOURCE_CONFIG_PATH", base_path)
+    monkeypatch.setattr(source_loader, "RUNTIME_SOURCE_CONFIG_PATH", runtime_path)
+
+    with caplog.at_level("WARNING"):
+        configs = load_source_config()
+
+    reddit = next(config for config in configs if config.platform == "reddit")
+    assert reddit.config["subreddits"] == ["BaseOnly"]
+    assert reddit.config["keywords"] == ["base_keyword"]
+    assert "Ignoring runtime source override" in caplog.text

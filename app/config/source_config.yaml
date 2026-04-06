@@ -22,18 +22,17 @@ platforms:
     enabled: false
     days_back: 30
     sites:
-      [
-        "trustpilot.com",
-        "g2.com",
-        "cnet.com",
-        "pcmag.com",
-        "theverge.com",
-        "androidauthority.com",
-        "tomsguide.com",
-        "techradar.com",
-        "amazon.com",
-        "bestbuy.com",
-      ]
+      - trustpilot.com
+      - g2.com
+      - cnet.com
+      - pcmag.com
+      - theverge.com
+      - androidauthority.com
+      - tomsguide.com
+      - techradar.com
+      - amazon.com
+      - bestbuy.com
+    keywords: []
     max_pages_per_site: 50
     min_content_chars: 500
     crawl_paths: ["homepage", "category"]
