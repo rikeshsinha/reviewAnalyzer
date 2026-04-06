@@ -183,7 +183,117 @@ This job selects unenriched docs, calls OpenAI, and writes structured outputs fo
 
 ---
 
-## 8) Run UI
+## 8) Web Reviews ingestion
+
+Use this section when you want to ingest editorial/product-review articles from the open web (`web_reviews` platform).
+
+### Supported sites list
+
+Default starter sites in `app/config/source_config.yaml`:
+
+- `trustpilot.com`
+- `g2.com`
+- `cnet.com`
+- `pcmag.com`
+- `theverge.com`
+- `androidauthority.com`
+- `tomsguide.com`
+- `techradar.com`
+- `amazon.com`
+- `bestbuy.com`
+
+These defaults are examples, not a guaranteed-coverage list. Keep your own curated list based on crawlability and policy constraints.
+
+### Refresh command
+
+CLI refresh:
+
+```bash
+python -m app.jobs.refresh_web_reviews
+```
+
+Explicit date window (inclusive, UTC day boundaries):
+
+```bash
+python -m app.jobs.refresh_web_reviews --date-from 2026-03-01 --date-to 2026-03-07
+```
+
+Behavior:
+
+- Uses merged source config (`app/config/source_config.yaml` + `data/runtime_source_config.yaml` if present).
+- Requires `web_reviews.enabled: true` and a non-empty `sites` list.
+- Crawls homepage/category pages, discovers likely editorial URLs, fetches article HTML, normalizes text, and inserts deduplicated docs.
+- Logs run metrics to `ingestion_runs` (`records_fetched`, `records_inserted`, status/error details).
+
+### Admin config workflow (recommended for new users)
+
+1. Start the app:
+   ```bash
+   streamlit run streamlit_app.py
+   ```
+2. Open **Admin** page.
+3. In **Source configuration**:
+   - Edit **Web review sites** (one domain per line).
+   - Optionally edit **Web review keywords** (used when keyword prioritization is enabled).
+   - Tune **Max pages per site** and **Min content length (chars)**.
+   - Click **Save config** (writes `data/runtime_source_config.yaml`).
+4. In `app/config/source_config.yaml`, make sure `platforms.web_reviews.enabled: true` (runtime editor currently manages lists/tunables; enable flag is set in base config).
+5. In **Web ingestion date range**, select start/end dates.
+6. Click **Refresh Web Reviews**.
+7. Verify status in **Recent ingestion runs** and **Ingestion run metrics by platform**.
+
+### Date range usage
+
+- CLI supports `--date-from` and `--date-to` in `YYYY-MM-DD`, inclusive.
+- Admin **Web ingestion date range** passes the same arguments to the job.
+- If no explicit dates are provided, the job falls back to `days_back` for the configured platform.
+- Date filtering is applied against normalized `created_at`/published timestamps; records outside the window are skipped.
+
+### Robots compliance behavior
+
+`WebReviewsClient` is intentionally conservative:
+
+- Reads and checks `robots.txt` per site before fetch (`can_fetch`).
+- Skips URLs disallowed by robots rules.
+- Enforces request pacing (default delay: 1.5s between requests).
+- Uses a dedicated crawler user-agent (`reviewAnalyzer/0.1 (editorial-web-crawler)`).
+
+If `robots.txt` cannot be read, crawling proceeds (warning logged), so you should still validate site policies manually before production runs.
+
+### Blocked site warnings
+
+Pages are treated as blocked and skipped when:
+
+- HTTP status is `403` or `429`, or
+- response body contains anti-bot markers (for example captcha/access-denied/cloudflare indicators).
+
+The crawler logs warnings and continues processing other pages/sites, so partial success is normal when a subset of targets blocks automated requests.
+
+### Caveats and operational safety expectations
+
+- **Site structure drift:** HTML layouts evolve; extractor accuracy can degrade without code changes.
+- **Extraction fragility:** Metadata/content heuristics can miss author/date/body on non-standard templates; tune `min_content_chars`, keywords, and site list accordingly.
+- **Legal/ToS compliance:** You are responsible for honoring each site's Terms of Service, robots directives, and jurisdictional requirements. Do not use this pipeline to bypass access controls, login walls, or explicit crawl prohibitions.
+
+### Example workflow (end-to-end)
+
+1. Refresh web reviews:
+   ```bash
+   python -m app.jobs.refresh_web_reviews --date-from 2026-03-01 --date-to 2026-03-07
+   ```
+2. Enrich new docs:
+   ```bash
+   python -m app.jobs.enrich_new_docs
+   ```
+3. Open dashboard:
+   ```bash
+   streamlit run streamlit_app.py
+   ```
+4. In Dashboard/Insights, filter date range and query themes/complaints/feature requests from combined sources.
+
+---
+
+## 9) Run UI
 
 Start Streamlit from repo root:
 
@@ -206,7 +316,7 @@ Date-range defaults in the UI:
 
 ---
 
-## 9) Example Samsung Health workflow
+## 10) Example Samsung Health workflow
 
 1. Set backend and credentials in `.env`:
    - `REDDIT_FETCH_BACKEND=pushshift`
@@ -233,7 +343,7 @@ Date-range defaults in the UI:
 
 ---
 
-## 10) Deployment notes (Streamlit Cloud)
+## 11) Deployment notes (Streamlit Cloud)
 
 - **Main file path:** `streamlit_app.py`
 - **Required secrets:**
@@ -264,7 +374,7 @@ PUSHSHIFT_MAX_PAGES = "20"
 
 ---
 
-## 11) Troubleshooting
+## 12) Troubleshooting
 
 ### A) Missing module / import path errors
 
@@ -296,7 +406,7 @@ PUSHSHIFT_MAX_PAGES = "20"
 
 ---
 
-## 12) Pushshift caveats
+## 13) Pushshift caveats
 
 When running with Pushshift:
 
