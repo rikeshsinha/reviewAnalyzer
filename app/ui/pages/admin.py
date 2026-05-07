@@ -132,7 +132,13 @@ def _rebuild_insight_cache(filters: dict[str, Any]) -> tuple[bool, str]:
         session.close()
 
 
-PLATFORM_OPTIONS = ["reddit", "web_reviews", "google_play"]
+PLATFORM_OPTIONS = ["reddit", "web_reviews", "google_play", "google_search_results"]
+PLATFORM_LABELS = {
+    "reddit": "Reddit",
+    "web_reviews": "Web Reviews",
+    "google_play": "Google Play",
+    "google_search_results": "Google Search Results",
+}
 
 
 def _normalize_text_list(raw_text: str) -> list[str]:
@@ -174,6 +180,11 @@ def _get_platform_view_model(platform: str, config: dict[str, Any]) -> dict[str,
         model["languages"] = list(config.get("languages", []))
         model["max_reviews_per_app"] = int(config.get("max_reviews_per_app", 1000))
         model["keywords"] = list(config.get("keywords", []))
+    elif platform == "google_search_results":
+        model["search_terms"] = list(config.get("search_terms", []))
+        model["max_results_per_term"] = int(config.get("max_results_per_term", 20))
+        model["country"] = str(config.get("country", "us"))
+        model["language"] = str(config.get("language", "en"))
     return model
 
 
@@ -202,6 +213,11 @@ def _get_platform_override_inputs(platform: str) -> dict[str, Any]:
         values["languages"] = _normalize_text_list(st.session_state.get("admin_platform_languages", ""))
         values["max_reviews_per_app"] = int(st.session_state.get("admin_platform_max_reviews_per_app", 1000))
         values["keywords"] = _normalize_text_list(st.session_state.get("admin_platform_keywords", ""))
+    elif platform == "google_search_results":
+        values["search_terms"] = _normalize_text_list(st.session_state.get("admin_platform_search_terms", ""))
+        values["max_results_per_term"] = int(st.session_state.get("admin_platform_max_results_per_term", 20))
+        values["country"] = str(st.session_state.get("admin_platform_google_search_country", "us")).strip()
+        values["language"] = str(st.session_state.get("admin_platform_google_search_language", "en")).strip()
     return values
 
 
@@ -220,6 +236,11 @@ def _validate_platform_override(platform: str, values: dict[str, Any]) -> str | 
             return "At least one Google Play app is required when google_play is enabled."
         if int(values.get("max_reviews_per_app", 0)) <= 0:
             return "Max reviews per app must be a positive integer."
+    if platform == "google_search_results":
+        if values["enabled"] and not values.get("search_terms"):
+            return "At least one search term is required when Google Search Results is enabled."
+        if int(values.get("max_results_per_term", 0)) <= 0:
+            return "Max results per term must be a positive integer."
     return None
 
 
@@ -238,6 +259,11 @@ def _platform_override_payload(platform: str, values: dict[str, Any]) -> dict[st
         payload["languages"] = values["languages"]
         payload["max_reviews_per_app"] = values["max_reviews_per_app"]
         payload["keywords"] = values["keywords"]
+    elif platform == "google_search_results":
+        payload["search_terms"] = values["search_terms"]
+        payload["max_results_per_term"] = values["max_results_per_term"]
+        payload["country"] = values["country"]
+        payload["language"] = values["language"]
     return payload
 
 
@@ -334,6 +360,7 @@ def render(filters: dict[str, Any]) -> None:
     selected_platform = st.selectbox(
         "Admin platform",
         options=PLATFORM_OPTIONS,
+        format_func=lambda value: PLATFORM_LABELS.get(value, value),
         key="admin_selected_platform",
         help="Select one platform for config editing and refresh operations.",
     )
@@ -349,6 +376,10 @@ def render(filters: dict[str, Any]) -> None:
             "admin_platform_countries",
             "admin_platform_languages",
             "admin_platform_max_reviews_per_app",
+            "admin_platform_search_terms",
+            "admin_platform_max_results_per_term",
+            "admin_platform_google_search_country",
+            "admin_platform_google_search_language",
         ]:
             st.session_state.pop(key, None)
         st.session_state["admin_last_selected_platform"] = selected_platform
@@ -357,6 +388,8 @@ def render(filters: dict[str, Any]) -> None:
     st.caption("Refresh runs only selected platform.")
     if selected_platform == "web_reviews":
         st.info("Placeholder adapter: validates config; crawler not yet implemented.")
+    if selected_platform == "google_search_results":
+        st.info("Google Search Results are metadata/snippets, not full article reviews. Use Web Reviews ingestion for full article bodies.")
     if st.button("Refresh selected platform"):
         selected_config = _get_selected_platform_config(selected_platform)
         if not selected_config.get("enabled", False):
@@ -376,6 +409,8 @@ def render(filters: dict[str, Any]) -> None:
                 st.success(f"Refresh completed for selected platform `{selected_platform}`.")
             else:
                 st.error(f"Refresh failed for selected platform `{selected_platform}`.")
+                if selected_platform == "google_search_results" and "Missing Google Search" in logs:
+                    st.warning("Google Search credentials are missing. Set GOOGLE_SEARCH_API_KEY and GOOGLE_SEARCH_ENGINE_ID, then retry.")
                 if "Selected platform(s) are not enabled or not defined" in logs:
                     st.warning("Selected platform is not enabled/defined in merged config; refresh was blocked.")
             st.code(f"{summary}\n\n{logs}" if logs else summary)
@@ -483,6 +518,8 @@ def render(filters: dict[str, Any]) -> None:
     st.caption("Refresh runs only selected platform.")
     if selected_platform == "web_reviews":
         st.info("Placeholder adapter: validates config; crawler not yet implemented.")
+    if selected_platform == "google_search_results":
+        st.info("Google Search Results are metadata/snippets, not full article reviews. Use Web Reviews ingestion for full article bodies.")
 
     st.session_state["admin_platform_enabled"] = st.session_state.get(
         "admin_platform_enabled",
@@ -553,6 +590,10 @@ def render(filters: dict[str, Any]) -> None:
             st.text_area("Keywords", key="admin_platform_keywords", height=120)
             st.session_state["admin_platform_max_reviews_per_app"] = st.session_state.get(
                 "admin_platform_max_reviews_per_app",
+            "admin_platform_search_terms",
+            "admin_platform_max_results_per_term",
+            "admin_platform_google_search_country",
+            "admin_platform_google_search_language",
                 current_platform_config.get("max_reviews_per_app", 1000),
             )
             st.number_input(
@@ -561,6 +602,33 @@ def render(filters: dict[str, Any]) -> None:
                 step=50,
                 key="admin_platform_max_reviews_per_app",
             )
+        elif selected_platform == "google_search_results":
+            st.session_state["admin_platform_search_terms"] = st.session_state.get(
+                "admin_platform_search_terms",
+                "\n".join(current_platform_config.get("search_terms", [])),
+            )
+            st.session_state["admin_platform_max_results_per_term"] = st.session_state.get(
+                "admin_platform_max_results_per_term",
+                current_platform_config.get("max_results_per_term", 20),
+            )
+            st.session_state["admin_platform_google_search_country"] = st.session_state.get(
+                "admin_platform_google_search_country",
+                current_platform_config.get("country", "us"),
+            )
+            st.session_state["admin_platform_google_search_language"] = st.session_state.get(
+                "admin_platform_google_search_language",
+                current_platform_config.get("language", "en"),
+            )
+            st.text_area("Search terms", key="admin_platform_search_terms", height=160)
+            st.number_input(
+                "Max results per term",
+                min_value=1,
+                step=1,
+                key="admin_platform_max_results_per_term",
+            )
+            st.text_input("Country", key="admin_platform_google_search_country")
+            st.text_input("Language", key="admin_platform_google_search_language")
+            st.caption("Uses Google Programmable Search / Custom Search JSON API; it does not scrape Google Search HTML.")
 
         submitted = st.form_submit_button("Save selected platform config", type="primary")
         if submitted:

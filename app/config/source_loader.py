@@ -327,6 +327,34 @@ def _normalize_platform_config(platform: str, raw: dict[str, Any]) -> PlatformSo
         normalized["min_content_chars"] = min_content_chars
         normalized["crawl_paths"] = crawl_paths
         normalized["prioritize_keywords"] = prioritize_keywords
+    elif platform == "google_search_results":
+        search_terms = _normalize_string_list(
+            raw.get("search_terms", []), field_name="search_terms", platform=platform
+        )
+        if enabled and not search_terms:
+            raise SourceConfigError(
+                "platform 'google_search_results' requires non-empty 'search_terms' when enabled"
+            )
+
+        max_results_per_term = raw.get("max_results_per_term", 20)
+        if not isinstance(max_results_per_term, int) or max_results_per_term <= 0:
+            raise SourceConfigError(
+                "platform 'google_search_results' field 'max_results_per_term' must be a positive integer"
+            )
+
+        language = raw.get("language")
+        if language is not None and not isinstance(language, str):
+            raise SourceConfigError("platform 'google_search_results' field 'language' must be a string")
+        country = raw.get("country")
+        if country is not None and not isinstance(country, str):
+            raise SourceConfigError("platform 'google_search_results' field 'country' must be a string")
+
+        normalized["search_terms"] = search_terms
+        normalized["max_results_per_term"] = max_results_per_term
+        if language:
+            normalized["language"] = language.strip()
+        if country:
+            normalized["country"] = country.strip().lower()
     else:
         for key, value in raw.items():
             if key in {"enabled", "days_back", "keywords"}:
@@ -383,7 +411,7 @@ def _format_yaml_scalar(value: Any) -> str:
 
 
 def _platform_sort_key(platform_name: str) -> tuple[int, str]:
-    preferred = {"reddit": 0, "web_reviews": 1, "google_play": 2}
+    preferred = {"reddit": 0, "web_reviews": 1, "google_play": 2, "google_search_results": 3}
     return (preferred.get(platform_name, 99), platform_name)
 
 

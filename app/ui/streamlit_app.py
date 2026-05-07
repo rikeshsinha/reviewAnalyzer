@@ -74,7 +74,7 @@ def _get_filter_options() -> dict[str, list[str]]:
             source_rows = session.execute(
                 text(
                     """
-                    SELECT DISTINCT COALESCE(name, platform) AS source_name
+                    SELECT DISTINCT platform AS source_name
                     FROM sources
                     ORDER BY source_name
                     """
@@ -166,6 +166,7 @@ def _build_sidebar_filters() -> dict[str, Any]:
         "Reddit": "reddit",
         "Web Reviews": "web_reviews",
         "Google Play": "google_play",
+        "Google Search Results": "google_search_results",
     }
     available_source_values = set(options["source"])
     source_labels = [
@@ -203,6 +204,8 @@ def _build_sidebar_filters() -> dict[str, Any]:
     rating = "All"
     if "google_play" in selected_sources:
         rating = st.sidebar.selectbox("Rating (1-5 stars)", options=["All"] + options["rating"])
+    if "google_search_results" in selected_sources:
+        st.sidebar.caption("Google Search Results are snippets/metadata only; use Web Reviews for full article bodies.")
     product = st.sidebar.selectbox("Product", options=["All"] + options["product"])
     issue = st.sidebar.selectbox("Issue", options=["All"] + options["issue"])
     competitor = st.sidebar.selectbox("Competitor", options=["All"] + options["competitor"])

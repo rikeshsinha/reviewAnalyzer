@@ -193,10 +193,14 @@ class RetrievalService:
                 params[key] = source_name
                 placeholders.append(f":{key}")
             where.append(
-                f"AND EXISTS (SELECT 1 FROM sources s WHERE s.id = d.source_id AND s.name IN ({', '.join(placeholders)}))"
+                f"AND EXISTS (SELECT 1 FROM sources s WHERE s.id = d.source_id "
+                f"AND (s.name IN ({', '.join(placeholders)}) OR s.platform IN ({', '.join(placeholders)})))"
             )
         elif source := filters.get("source"):
-            where.append("AND EXISTS (SELECT 1 FROM sources s WHERE s.id = d.source_id AND s.name = :source)")
+            where.append(
+                "AND EXISTS (SELECT 1 FROM sources s WHERE s.id = d.source_id "
+                "AND (s.name = :source OR s.platform = :source))"
+            )
             params["source"] = source
 
         if subreddit := filters.get("subreddit"):
