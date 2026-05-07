@@ -467,3 +467,57 @@ def test_runtime_overrides_write_and_read_round_trip(tmp_path: Path, monkeypatch
         "languages": ["en"],
         "max_reviews_per_app": 250,
     }
+
+
+def test_google_search_results_config_loads_with_defaults(tmp_path: Path) -> None:
+    config_path = tmp_path / "source_config.yaml"
+    config_path.write_text(
+        """
+platforms:
+  google_search_results:
+    enabled: true
+    search_terms: ["Samsung Health review", "Galaxy Watch Samsung Health sleep tracking"]
+    days_back: 30
+""".strip(),
+        encoding="utf-8",
+    )
+
+    cfg = load_source_config(config_path)[0]
+
+    assert cfg.platform == "google_search_results"
+    assert cfg.enabled is True
+    assert cfg.config["search_terms"] == ["Samsung Health review", "Galaxy Watch Samsung Health sleep tracking"]
+    assert cfg.config["max_results_per_term"] == 20
+
+
+def test_google_search_results_empty_terms_fails_when_enabled(tmp_path: Path) -> None:
+    config_path = tmp_path / "source_config.yaml"
+    config_path.write_text(
+        """
+platforms:
+  google_search_results:
+    enabled: true
+    search_terms: []
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SourceConfigError, match="google_search_results.*search_terms"):
+        load_source_config(config_path)
+
+
+def test_google_search_results_invalid_max_results_fails(tmp_path: Path) -> None:
+    config_path = tmp_path / "source_config.yaml"
+    config_path.write_text(
+        """
+platforms:
+  google_search_results:
+    enabled: true
+    search_terms: ["Samsung Health"]
+    max_results_per_term: 0
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SourceConfigError, match="google_search_results.*max_results_per_term"):
+        load_source_config(config_path)

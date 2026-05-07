@@ -168,3 +168,57 @@ def test_filter_selected_platforms_preserves_selected_order(monkeypatch) -> None
     selected = refresh_sources._filter_selected_platforms(enabled, ["google_play", "reddit"])  # noqa: SLF001
 
     assert [cfg.platform for cfg in selected] == ["google_play", "reddit"]
+
+
+def test_refresh_sources_selected_google_search_results_runs_only_that_platform(monkeypatch) -> None:
+    calls: list[str] = []
+    monkeypatch.setattr(
+        refresh_sources,
+        "get_enabled_platform_configs",
+        lambda: [
+            PlatformSourceConfig(platform="reddit", enabled=True, days_back=30, config={"subreddits": ["a"]}),
+            PlatformSourceConfig(
+                platform="google_search_results",
+                enabled=True,
+                days_back=30,
+                config={"search_terms": ["Samsung Health"], "max_results_per_term": 20},
+            ),
+        ],
+    )
+    monkeypatch.setattr(
+        refresh_sources,
+        "_run_platform_refresh",
+        lambda platform, config, days_back: calls.append(platform),
+    )
+    monkeypatch.setenv("INGESTION_PLATFORMS", "google_search_results")
+
+    refresh_sources.run()
+
+    assert calls == ["google_search_results"]
+
+
+def test_refresh_sources_google_search_failure_is_platform_scoped(monkeypatch, caplog) -> None:
+    calls: list[str] = []
+    monkeypatch.setattr(
+        refresh_sources,
+        "get_enabled_platform_configs",
+        lambda: [
+            PlatformSourceConfig(platform="google_search_results", enabled=True, days_back=30, config={"search_terms": ["q"]}),
+            PlatformSourceConfig(platform="reddit", enabled=True, days_back=30, config={"subreddits": ["a"]}),
+        ],
+    )
+
+    def fake_run(platform: str, config: dict[str, object], days_back: int) -> None:
+        del config, days_back
+        calls.append(platform)
+        if platform == "google_search_results":
+            raise RuntimeError("Missing Google Search API key (GOOGLE_SEARCH_API_KEY)")
+
+    monkeypatch.setattr(refresh_sources, "_run_platform_refresh", fake_run)
+    monkeypatch.delenv("INGESTION_FAIL_FAST", raising=False)
+
+    refresh_sources.run()
+
+    assert calls == ["google_search_results", "reddit"]
+    assert "google_search_results" in caplog.text
+    assert "Missing Google Search API key" in caplog.text

@@ -6,11 +6,13 @@ from typing import Type
 
 from app.ingestion.base import BaseIngestionAdapter
 from app.ingestion.google_play_ingestor import GooglePlayIngestor
+from app.ingestion.google_search_results_ingestor import GoogleSearchResultsIngestor
 from app.ingestion.reddit_ingestor import RedditIngestor
 
 INGESTION_ADAPTERS: dict[str, Type[BaseIngestionAdapter]] = {
     "reddit": RedditIngestor,
     "google_play": GooglePlayIngestor,
+    "google_search_results": GoogleSearchResultsIngestor,
     "google-play": GooglePlayIngestor,
     "app_store": RedditIngestor,
     "youtube": RedditIngestor,
