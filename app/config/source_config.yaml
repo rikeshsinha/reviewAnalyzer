@@ -37,3 +37,16 @@ platforms:
     min_content_chars: 500
     crawl_paths: ["homepage", "category"]
     prioritize_keywords: false
+
+  google_search_results:
+    enabled: true
+    search_terms:
+      - "Samsung Health review"
+      - "Galaxy Watch Samsung Health sleep tracking"
+      - "Galaxy Ring review Samsung Health"
+      - "Samsung Health complaints"
+      - "Samsung Health feature requests"
+    max_results_per_term: 20
+    days_back: 30
+    language: "en"
+    country: "us"

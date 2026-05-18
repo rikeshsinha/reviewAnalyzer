@@ -302,6 +302,7 @@ def test_dashboard_where_clause_supports_multi_source_and_web_domain() -> None:
         }
     )
 
+    assert "s.platform IN" in where_sql
     assert "s.name IN" in where_sql
     assert params["source_0"] == "reddit"
     assert params["source_1"] == "web_reviews"

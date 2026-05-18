@@ -58,6 +58,12 @@ class IngestionSettings(BaseModel):
         alias="PUBLIC_REDDIT_INCLUDE_RECENT_WHEN_NO_KEYWORD_HITS",
     )
     runtime_source_config_path: str = Field("data/runtime_source_config.yaml", alias="RUNTIME_SOURCE_CONFIG_PATH")
+    google_search_api_key: str | None = Field(None, alias="GOOGLE_SEARCH_API_KEY")
+    google_search_engine_id: str | None = Field(None, alias="GOOGLE_SEARCH_ENGINE_ID")
+    google_search_cx: str | None = Field(None, alias="GOOGLE_SEARCH_CX")
+    google_search_results_per_term: int = Field(20, alias="GOOGLE_SEARCH_RESULTS_PER_TERM", ge=1)
+    google_search_country: str = Field("us", alias="GOOGLE_SEARCH_COUNTRY", min_length=1)
+    google_search_language: str = Field("en", alias="GOOGLE_SEARCH_LANGUAGE", min_length=1)
 
 
 class EnrichmentSettings(CommonSettings):
@@ -92,6 +98,12 @@ def _build_env_values() -> dict[str, Any]:
             "PUBLIC_REDDIT_INCLUDE_RECENT_WHEN_NO_KEYWORD_HITS"
         ),
         "RUNTIME_SOURCE_CONFIG_PATH": os.getenv("RUNTIME_SOURCE_CONFIG_PATH"),
+        "GOOGLE_SEARCH_API_KEY": os.getenv("GOOGLE_SEARCH_API_KEY"),
+        "GOOGLE_SEARCH_ENGINE_ID": os.getenv("GOOGLE_SEARCH_ENGINE_ID"),
+        "GOOGLE_SEARCH_CX": os.getenv("GOOGLE_SEARCH_CX"),
+        "GOOGLE_SEARCH_RESULTS_PER_TERM": os.getenv("GOOGLE_SEARCH_RESULTS_PER_TERM"),
+        "GOOGLE_SEARCH_COUNTRY": os.getenv("GOOGLE_SEARCH_COUNTRY"),
+        "GOOGLE_SEARCH_LANGUAGE": os.getenv("GOOGLE_SEARCH_LANGUAGE"),
     }
     cleaned_values: dict[str, Any] = {}
     for key, value in raw_values.items():

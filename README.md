@@ -462,3 +462,74 @@ python -m app.jobs.refresh_reddit
 python -m app.jobs.enrich_new_docs
 streamlit run streamlit_app.py
 ```
+
+---
+
+## Google Search Results ingestion
+
+`google_search_results` collects top search result metadata/snippets for configured search terms and stores them in the same canonical `documents` flow used by Reddit, Web Reviews, and Google Play. This source is useful for tracking what users and product teams see on search result pages for Samsung Health, Galaxy Watch, and Galaxy Ring topics.
+
+> Compliance note: this source uses an API-based adapter for Google Programmable Search / Custom Search JSON API. Do **not** scrape Google Search HTML pages. Search result records are metadata/snippets, not full article reviews; use Web Reviews ingestion when you need full article bodies.
+
+### Required environment variables
+
+```bash
+GOOGLE_SEARCH_API_KEY=your_key
+GOOGLE_SEARCH_ENGINE_ID=your_cx
+GOOGLE_SEARCH_RESULTS_PER_TERM=20
+GOOGLE_SEARCH_COUNTRY=us
+GOOGLE_SEARCH_LANGUAGE=en
+```
+
+`GOOGLE_SEARCH_ENGINE_ID` is the Programmable Search Engine `cx` value. These credentials are validated only when `google_search_results` ingestion runs, so missing Google credentials do not block Reddit, Web Reviews, or Google Play.
+
+### Default source config
+
+`app/config/source_config.yaml` includes the platform with Samsung Health / Galaxy Watch / Galaxy Ring defaults:
+
+```yaml
+google_search_results:
+  enabled: true
+  search_terms:
+    - "Samsung Health review"
+    - "Galaxy Watch Samsung Health sleep tracking"
+    - "Galaxy Ring review Samsung Health"
+    - "Samsung Health complaints"
+    - "Samsung Health feature requests"
+  max_results_per_term: 20
+  days_back: 30
+  language: "en"
+  country: "us"
+```
+
+`max_results_per_term` defaults to `20` and is configurable in YAML, runtime Admin overrides, or `GOOGLE_SEARCH_RESULTS_PER_TERM` for adapter defaults.
+
+### CLI refresh
+
+Run only Google Search Results ingestion:
+
+```bash
+INGESTION_PLATFORMS=google_search_results python -m app.jobs.refresh_sources
+```
+
+The adapter fetches up to the configured max results per term, preserves the raw API item, query term, rank, display link/domain, snippet, title, and source URL, then deduplicates by normalized URL before insertion.
+
+### Admin workflow
+
+1. Start Streamlit:
+
+   ```bash
+   streamlit run streamlit_app.py
+   ```
+
+2. Open **Admin**.
+3. Select **Google Search Results** from the ingestion platform dropdown.
+4. Edit search terms.
+5. Set **Max results per term** (default `20`).
+6. Confirm country (`us` by default), language (`en` by default), and days back.
+7. Click **Refresh selected platform**.
+8. Open **Explorer** and filter source to `google_search_results` to confirm records are searchable. Ask, Dashboard, and Insights can use these records when the source filter includes `google_search_results`.
+
+### Quota/cost warning
+
+Google Custom Search JSON API usage may be quota-limited or billable depending on your Google Cloud setup and request volume. Each search term may require multiple API calls because the API commonly returns up to 10 results per request.
