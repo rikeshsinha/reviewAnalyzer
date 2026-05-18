@@ -24,10 +24,14 @@ def _where_clause(filters: dict[str, Any]) -> tuple[str, dict[str, Any]]:
             params[key] = source_name
             placeholders.append(f":{key}")
         where_parts.append(
-            f"AND EXISTS (SELECT 1 FROM sources s WHERE s.id = d.source_id AND s.name IN ({', '.join(placeholders)}))"
+            f"AND EXISTS (SELECT 1 FROM sources s WHERE s.id = d.source_id "
+            f"AND (s.platform IN ({', '.join(placeholders)}) OR s.name IN ({', '.join(placeholders)})))"
         )
     elif filters.get("source"):
-        where_parts.append("AND EXISTS (SELECT 1 FROM sources s WHERE s.id = d.source_id AND s.name = :source)")
+        where_parts.append(
+            "AND EXISTS (SELECT 1 FROM sources s WHERE s.id = d.source_id "
+            "AND (s.platform = :source OR s.name = :source))"
+        )
         params["source"] = filters["source"]
     if filters.get("subreddit"):
         where_parts.append("AND json_extract(d.raw_json, '$.subreddit') = :subreddit")
